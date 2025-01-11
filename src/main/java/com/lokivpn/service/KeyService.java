@@ -13,6 +13,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -50,21 +51,23 @@ public class KeyService {
                 for (VpnClient client : clients) {
                     String deviceType = client.getDeviceType() != null ? client.getDeviceType() : "Устройство";
 
+                    logger.info("Device type: {}, Client name: {}, Is assigned: {}, Reserved until: {}",
+                            deviceType, client.getClientName(), client.isAssigned(), client.getReservedUntil());
+
                     String emoji;
-                    switch (deviceType.toLowerCase()) {
-                        case "pc":
-                            emoji = "🖥️";
-                            break;
-                        case "phone":
-                            emoji = "📱";
-                            break;
-                        default:
-                            emoji = "🔑";
-                            break;
+                    if (client.isAssigned()) {
+                        // Ключ активен
+                        emoji = client.getDeviceType() != null && client.getDeviceType().equalsIgnoreCase("pc") ? "🖥️" : "📱";
+                    } else if (client.getReservedUntil() != null && client.getReservedUntil().isAfter(LocalDateTime.now())) {
+                        // Ключ зарезервирован
+                        emoji = "🔑";
+                    } else {
+                        // Неопределенный статус
+                        emoji = "❌";
                     }
 
                     InlineKeyboardButton button = new InlineKeyboardButton(emoji + " " + deviceType + " (" + client.getClientName() + ")");
-                    button.setCallbackData("key_" + client.getId());
+                    button.setCallbackData(client.isAssigned() ? "key_" + client.getId() : "reserved_" + client.getId());
                     buttons.add(Collections.singletonList(button));
                 }
 
@@ -78,102 +81,40 @@ public class KeyService {
         }
     }
 
-    public void deleteConfiguration(String chatId, String clientId, TelegramLongPollingBot bot) {
-        try {
-            // Находим конфигурацию по clientId
-            VpnClient client = telegramBotService.getClientById(clientId);
-
-            // Убираем связь конфигурации с пользователем
-            client.setAssigned(false);
-            client.setChatId(null);
-            client.setUsername(null);
-            client.setDeviceType(null); // Сбрасываем тип устройства
-            telegramBotService.saveClient(client);
-
-            // Уведомляем пользователя об успешном удалении
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText("✅ Конфигурация для устройства " + client.getDeviceType() + " успешно удалена.");
-            bot.execute(message);
-        } catch (Exception e) {
-            logger.error("Ошибка при удалении конфигурации: {}", e.getMessage(), e);
-
-            // Отправляем сообщение об ошибке пользователю
-            sendErrorMessage(chatId, "❌ Ошибка при удалении конфигурации. Попробуйте позже.", bot);
-        }
-    }
-
     public void handleDeviceCallback(String chatId, String callbackData, TelegramLongPollingBot bot) {
         try {
-            // Извлекаем clientId из callbackData
-            String clientId = callbackData.split("_")[1];
+            String[] parts = callbackData.split("_");
+            String action = parts[0];
+            String clientId = parts[1];
+
             VpnClient client = telegramBotService.getClientById(clientId);
 
-            // Формируем сообщение с информацией о клиенте
             SendMessage message = new SendMessage();
             message.setChatId(chatId);
 
-            // Формируем текст с использованием MarkdownV2 для скрытого ключа
-            String hiddenKey = "Ваш ключ для устройства " + client.getDeviceType() + ":\n||" + escapeMarkdownV2(client.getClientPublicKey()) + "||";
-            message.setText(hiddenKey);
+            if ("key".equals(action)) {
+                // Ключ активен — позволяем скачать конфигурацию
+                message.setText("Ваш ключ для устройства " + client.getDeviceType() + ":");
+                InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
 
-            // Указываем использование MarkdownV2
-            message.setParseMode("MarkdownV2");
+                InlineKeyboardButton qrButton = new InlineKeyboardButton("📷 Показать QR код");
+                qrButton.setCallbackData("show_qr_" + client.getId());
 
-            // Добавляем кнопки для QR-кода, файла конфигурации и удаления
-            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-            InlineKeyboardButton qrButton = new InlineKeyboardButton("📷 Показать QR код");
-            qrButton.setCallbackData("show_qr_" + client.getId());
+                InlineKeyboardButton configButton = new InlineKeyboardButton("📂 Скачать конфиг");
+                configButton.setCallbackData("download_config_" + client.getId());
 
-            InlineKeyboardButton configButton = new InlineKeyboardButton("📂 Скачать конфиг");
-            configButton.setCallbackData("download_config_" + client.getId());
-
-            InlineKeyboardButton deleteButton = new InlineKeyboardButton("❌ Удалить конфигурацию");
-            deleteButton.setCallbackData("delete_config_" + client.getId());
-
-            // Размещаем кнопки: первые две на одной строке, третью на отдельной строке
-            markup.setKeyboard(Arrays.asList(
-                    Arrays.asList(qrButton, configButton), // Первая строка: QR-код и Скачать конфиг
-                    Collections.singletonList(deleteButton) // Вторая строка: Удалить конфигурацию
-            ));
-
-            message.setReplyMarkup(markup);
+                markup.setKeyboard(Arrays.asList(
+                        Arrays.asList(qrButton, configButton)
+                ));
+                message.setReplyMarkup(markup);
+            } else if ("reserved".equals(action)) {
+                // Ключ зарезервирован — сообщаем о необходимости оплаты
+                message.setText("Этот ключ зарезервирован. Пожалуйста, оплатите его, чтобы получить доступ.");
+            }
 
             bot.execute(message);
         } catch (Exception e) {
             logger.error("Ошибка обработки callback для устройства: {}", e.getMessage(), e);
-        }
-    }
-
-    private String escapeMarkdownV2(String text) {
-        return text.replace("_", "\\_")
-                .replace("*", "\\*")
-                .replace("[", "\\[")
-                .replace("]", "\\]")
-                .replace("(", "\\(")
-                .replace(")", "\\)")
-                .replace("~", "\\~")
-                .replace("`", "\\`")
-                .replace(">", "\\>")
-                .replace("#", "\\#")
-                .replace("+", "\\+")
-                .replace("-", "\\-")
-                .replace("=", "\\=")
-                .replace("|", "\\|")
-                .replace("{", "\\{")
-                .replace("}", "\\}")
-                .replace(".", "\\.")
-                .replace("!", "\\!");
-    }
-
-    private void sendErrorMessage(String chatId, String text, TelegramLongPollingBot bot) {
-        try {
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText(text);
-            bot.execute(message);
-        } catch (TelegramApiException e) {
-            logger.error("Ошибка при отправке сообщения об ошибке: {}", e.getMessage(), e);
         }
     }
 }

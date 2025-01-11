@@ -13,16 +13,13 @@ import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
-import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
-import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
-import java.io.File;
+import java.util.*;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+
 
 @Service
 public class VpnProvisionService {
@@ -94,7 +91,6 @@ public class VpnProvisionService {
         }
     }
 
-
     public void sendDeviceSelection(String chatId) {
         try {
             SendMessage message = new SendMessage();
@@ -118,46 +114,89 @@ public class VpnProvisionService {
         }
     }
 
-    public void assignVpnToDevice(String chatId, String username, String plan) {
+    public void handleDeviceSelection(String chatId, String callbackData) {
         try {
-            VpnClient vpnClient = telegramBotService.assignClientToUser(chatId, username, "Phone");
+            String deviceType;
+            String osType = null; // Будет выбрано позже при выборе ОС
 
-            // Установка срока подписки
-            LocalDateTime reservedUntil = switch (plan) {
-                case "1 месяц" -> LocalDateTime.now().plusMonths(1);
-                case "3 месяца" -> LocalDateTime.now().plusMonths(3);
-                case "6 месяцев" -> LocalDateTime.now().plusMonths(6);
-                case "1 год" -> LocalDateTime.now().plusYears(1);
-                default -> throw new IllegalArgumentException("Invalid plan: " + plan);
-            };
-            vpnClient.setReservedUntil(reservedUntil);
+            // Обработка выбора устройства
+            if (callbackData.equals("device_pc")) {
+                deviceType = "ПК";
+            } else if (callbackData.equals("device_phone")) {
+                deviceType = "Смартфон";
+            } else {
+                throw new IllegalArgumentException("Некорректный выбор устройства");
+            }
 
-            vpnClientRepository.save(vpnClient);
+            // Обновление данных пользователя в базе
+            updateDeviceForUser(chatId, deviceType, osType);
 
-            // Уведомление пользователя
-            sendSuccessMessage(chatId, plan);
+            // Отправка сообщения с выбором ОС
+            sendOsSelectionMessage(chatId, deviceType);
         } catch (Exception e) {
-            logger.error("Ошибка при выдаче VPN: ", e);
-            sendErrorMessage(chatId, "Произошла ошибка. Попробуйте позже.");
+            logger.error("Ошибка при обработке выбора устройства: {}", e.getMessage(), e);
+            sendErrorMessage(chatId, "Ошибка при выборе устройства. Попробуйте снова.");
+        }
+    }
+
+    public void updateDeviceForUser(String chatId, String deviceType, String osType) {
+        try {
+            VpnClient client = vpnClientRepository.findFirstByChatId(chatId)
+                    .orElseThrow(() -> new RuntimeException("Клиент не найден для пользователя: " + chatId));
+
+            client.setDeviceType(deviceType);
+            client.setOsType(osType); // Обнуляем до выбора ОС
+            vpnClientRepository.save(client);
+
+            logger.info("Устройство для пользователя {} обновлено: {}, ОС обнулена.", chatId, deviceType);
+        } catch (Exception e) {
+            logger.error("Ошибка при обновлении устройства для пользователя {}: {}", chatId, e.getMessage(), e);
+        }
+    }
+
+    private void sendOsSelectionMessage(String chatId, String deviceType) {
+        try {
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            message.setText("Вы выбрали устройство: " + deviceType + ". Пожалуйста, выберите операционную систему:");
+
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            List<List<InlineKeyboardButton>> buttons = new ArrayList<>();
+
+            if ("ПК".equals(deviceType)) {
+                // Для ПК
+                InlineKeyboardButton windowsButton = new InlineKeyboardButton("🖥 Windows");
+                windowsButton.setCallbackData("os_windows");
+                InlineKeyboardButton macosButton = new InlineKeyboardButton("🍎 macOS");
+                macosButton.setCallbackData("os_macos");
+                InlineKeyboardButton linuxButton = new InlineKeyboardButton("🐧 Linux");
+                linuxButton.setCallbackData("os_linux");
+
+                buttons.add(Arrays.asList(windowsButton, macosButton));
+                buttons.add(Collections.singletonList(linuxButton));
+            } else {
+                // Для смартфона
+                InlineKeyboardButton iosButton = new InlineKeyboardButton("🍏 iOS");
+                iosButton.setCallbackData("os_ios");
+                InlineKeyboardButton androidButton = new InlineKeyboardButton("🤖 Android");
+                androidButton.setCallbackData("os_android");
+
+                buttons.add(Arrays.asList(iosButton, androidButton));
+            }
+
+            markup.setKeyboard(buttons);
+            message.setReplyMarkup(markup);
+
+            telegramBotService.getBot().execute(message);
+        } catch (TelegramApiException e) {
+            logger.error("Ошибка при отправке сообщения выбора ОС: {}", e.getMessage(), e);
         }
     }
 
     public void handleOsSelection(String chatId, String osType) {
         try {
             VpnClient client = vpnClientRepository.findFirstByChatId(chatId)
-                    .orElseGet(() -> {
-                        // Поиск доступного клиента
-                        Optional<VpnClient> availableClient = vpnClientRepository
-                                .findFirstByReservedUntilBeforeOrReservedUntilIsNull(LocalDateTime.now());
-                        if (availableClient.isEmpty()) {
-                            throw new RuntimeException("Нет доступных клиентов для назначения.");
-                        }
-
-                        VpnClient newClient = availableClient.get();
-                        newClient.setChatId(chatId);
-                        newClient.setReservedUntil(LocalDateTime.now().plusMinutes(15)); // Устанавливаем временную резервацию
-                        return vpnClientRepository.save(newClient);
-                    });
+                    .orElseThrow(() -> new RuntimeException("Клиент не найден для пользователя: " + chatId));
 
             // Устанавливаем ОС и сохраняем
             client.setOsType(osType);
@@ -170,6 +209,7 @@ public class VpnProvisionService {
             message.setText("Вы выбрали операционную систему: " + osType + ". Продолжайте настройку.");
             telegramBotService.getBot().execute(message);
 
+            // Отправляем меню выбора плана подписки
             sendPlanSelectionMenu(chatId);
         } catch (RuntimeException e) {
             logger.error("Ошибка: {}", e.getMessage(), e);
@@ -179,8 +219,6 @@ public class VpnProvisionService {
             sendErrorMessage(chatId, "Произошла ошибка при обработке выбора ОС. Попробуйте снова.");
         }
     }
-
-
 
     public void sendPlanSelectionMenu(String chatId) {
         try {
@@ -294,26 +332,6 @@ public class VpnProvisionService {
             telegramBotService.getBot().execute(new SendMessage(chatId, text)); // Доступ к боту через TelegramBotService
         } catch (Exception e) {
             logger.error("Ошибка отправки сообщения об ошибке: {}", e.getMessage(), e);
-        }
-    }
-
-    private void sendSuccessMessage(String chatId, String plan) {
-        try {
-            String expirationMessage = switch (plan) {
-                case "1 месяц" -> "Подписка активна до " + LocalDateTime.now().plusMonths(1).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"));
-                case "3 месяца" -> "Подписка активна до " + LocalDateTime.now().plusMonths(3).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"));
-                case "6 месяцев" -> "Подписка активна до " + LocalDateTime.now().plusMonths(6).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"));
-                case "1 год" -> "Подписка активна до " + LocalDateTime.now().plusYears(1).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"));
-                default -> "Не удалось определить срок подписки.";
-            };
-
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText("Подписка на план \"" + plan + "\" успешно активирована!\n" + expirationMessage);
-
-            telegramBotService.getBot().execute(message);
-        } catch (Exception e) {
-            logger.error("Ошибка при отправке сообщения: {}", e.getMessage(), e);
         }
     }
 }

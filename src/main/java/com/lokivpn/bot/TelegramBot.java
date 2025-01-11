@@ -135,10 +135,8 @@ public class TelegramBot extends TelegramLongPollingBot {
                         vpnProvisionService.sendDeviceSelection(chatId); // Показываем меню выбора устройства
                         break;
                     case "device_phone":
-                        menuService.sendOsSelectionMenu(chatId, this); // Показываем меню выбора ОС
-                        break;
                     case "device_pc":
-                        menuService.sendPcOsSelectionMenu(chatId, this); // Показываем меню выбора ОС для ПК
+                        vpnProvisionService.handleDeviceSelection(chatId, callbackData);
                         break;
                     case "instruction_ios":
                         instructionService.sendDeviceInstruction(chatId, "ios", this);
@@ -178,9 +176,6 @@ public class TelegramBot extends TelegramLongPollingBot {
                             configFileService.sendConfigFile(chatId, this);
                         } else if (callbackData.startsWith("key_")) {
                             keyService.handleDeviceCallback(chatId, callbackData, this);
-                        } else if (callbackData.startsWith("delete_config_")) {
-                            String clientId = callbackData.split("_")[2];
-                            keyService.deleteConfiguration(chatId, clientId, this);
                         } else if (callbackData.equals("plan_1_month")) {
                                 vpnProvisionService.handlePlanSelection(chatId, "1 месяц", username);
                         } else if (callbackData.equals("plan_3_months")) {

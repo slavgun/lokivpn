@@ -70,7 +70,7 @@ public interface VpnClientRepository
     @Query("SELECT vc FROM VpnClient vc WHERE vc.reservedUntil IS NOT NULL AND vc.reservedUntil < :currentTime")
     List<VpnClient> findAllExpiredReservations(@Param("currentTime") LocalDateTime currentTime);
 
-    @Query("SELECT vc FROM VpnClient vc WHERE vc.chatId = :chatId AND (vc.isAssigned = TRUE OR vc.reservedUntil > CURRENT_TIMESTAMP)")
+    @Query("SELECT vc FROM VpnClient vc WHERE vc.chatId = :chatId AND (vc.isAssigned = TRUE OR (vc.reservedUntil IS NOT NULL AND vc.reservedUntil > CURRENT_TIMESTAMP))")
     List<VpnClient> findActiveAndReservedClientsByChatId(@Param("chatId") String chatId);
 }
 

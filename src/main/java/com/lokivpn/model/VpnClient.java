@@ -118,14 +118,6 @@ public class VpnClient {
         this.qrCodePath = qrCodePath;
     }
 
-    public boolean isAssigned() {
-        return isAssigned;
-    }
-
-    public void setAssigned(boolean assigned) {
-        isAssigned = assigned;
-    }
-
     public String getChatId() {
         return chatId;
     }
@@ -172,5 +164,13 @@ public class VpnClient {
 
     public void setReservedUntil(LocalDateTime reservedUntil) {
         this.reservedUntil = reservedUntil;
+    }
+
+    public boolean isAssigned() { // Геттер для boolean
+        return isAssigned;
+    }
+
+    public void setAssigned(boolean assigned) {
+        isAssigned = assigned;
     }
 }

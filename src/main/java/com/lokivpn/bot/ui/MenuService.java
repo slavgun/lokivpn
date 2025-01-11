@@ -141,59 +141,6 @@ public class MenuService {
         return button;
     }
 
-
-    public void sendOsSelectionMenu(String chatId, TelegramLongPollingBot bot) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText("Выберите операционную систему вашего устройства:");
-
-        // Создаем кнопки
-        InlineKeyboardButton androidButton = createButton("🤖 Android", "os_android", null);
-        InlineKeyboardButton iosButton = createButton("🍎 iOS", "os_ios", null);
-
-        // Добавляем кнопки в макет
-        List<List<InlineKeyboardButton>> buttons = new ArrayList<>();
-        buttons.add(Collections.singletonList(androidButton));
-        buttons.add(Collections.singletonList(iosButton));
-
-        InlineKeyboardMarkup keyboardMarkup = new InlineKeyboardMarkup();
-        keyboardMarkup.setKeyboard(buttons);
-
-        message.setReplyMarkup(keyboardMarkup);
-
-        try {
-            bot.execute(message);
-        } catch (TelegramApiException e) {
-            logger.error("Ошибка при отправке меню выбора ОС: {}", e.getMessage(), e);
-        }
-    }
-
-    public void sendPcOsSelectionMenu(String chatId, TelegramLongPollingBot bot) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText("Выберите операционную систему вашего ПК:");
-
-        // Создаем кнопки
-        InlineKeyboardButton windowsButton = createButton("🖥️ Windows", "os_windows", null);
-        InlineKeyboardButton macosButton = createButton("🍎 macOS", "os_macos", null);
-
-        // Добавляем кнопки в макет
-        List<List<InlineKeyboardButton>> buttons = new ArrayList<>();
-        buttons.add(Collections.singletonList(windowsButton));
-        buttons.add(Collections.singletonList(macosButton));
-
-        InlineKeyboardMarkup keyboardMarkup = new InlineKeyboardMarkup();
-        keyboardMarkup.setKeyboard(buttons);
-
-        message.setReplyMarkup(keyboardMarkup);
-
-        try {
-            bot.execute(message);
-        } catch (TelegramApiException e) {
-            logger.error("Ошибка при отправке меню выбора ОС для ПК: {}", e.getMessage(), e);
-        }
-    }
-
     private void sendErrorMessage(String chatId, TelegramLongPollingBot bot, String errorMessage) {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
