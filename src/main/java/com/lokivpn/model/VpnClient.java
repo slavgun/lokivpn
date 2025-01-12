@@ -53,6 +53,9 @@ public class VpnClient {
     @Column(name = "plan")
     private String plan;
 
+    @Column(name = "expiration_date")
+    private LocalDateTime expirationDate;
+
 
     public String getPlan() {
         return plan;
@@ -172,5 +175,13 @@ public class VpnClient {
 
     public void setAssigned(boolean assigned) {
         isAssigned = assigned;
+    }
+
+    public LocalDateTime getExpirationDate() {
+        return expirationDate;
+    }
+
+    public void setExpirationDate(LocalDateTime expirationDate) {
+        this.expirationDate = expirationDate;
     }
 }

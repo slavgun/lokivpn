@@ -1,6 +1,8 @@
 package com.lokivpn.model;
 
 import jakarta.persistence.*;
+
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -12,23 +14,17 @@ public class User {
     private String username;
     private String chatId;
     private String role; // ADMIN, USER, CLIENT
-    private String clientName;
-    private String paymentStatus;
     private String plan;
-    private Double price;
     private LocalDateTime startDate;
     private LocalDateTime endDate;
-    private String serverName;
-    private String deviceType;
-    private String osType;
-    private LocalDateTime assignedAt;
-    private LocalDateTime reservedUntil;
     private LocalDateTime blockedUntil;
-    private LocalDateTime vpnGeneratedAt;
-    private String configFile;
-    private String qrCodePath;
-    private String clientPublicKey;
-    private String transactionId;
+
+    @Column(name = "last_plan_selected")
+    private String lastPlanSelected;
+
+    @Column(name = "last_plan_time")
+    private Instant lastPlanTime;
+
 
     // Getters and Setters
     public Long getId() {
@@ -94,5 +90,22 @@ public class User {
     public void setBlockedUntil(LocalDateTime blockedUntil) {
         this.blockedUntil = blockedUntil;
     }
+
+    public String getLastPlanSelected() {
+        return lastPlanSelected;
+    }
+
+    public void setLastPlanSelected(String lastPlanSelected) {
+        this.lastPlanSelected = lastPlanSelected;
+    }
+
+    public Instant getLastPlanTime() {
+        return lastPlanTime;
+    }
+
+    public void setLastPlanTime(Instant lastPlanTime) {
+        this.lastPlanTime = lastPlanTime;
+    }
+
 }
 

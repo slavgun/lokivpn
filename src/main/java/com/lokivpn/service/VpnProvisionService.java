@@ -1,5 +1,6 @@
 package com.lokivpn.service;
 
+import com.lokivpn.model.User;
 import com.lokivpn.model.VpnClient;
 import com.lokivpn.bot.TelegramBotService;
 import com.lokivpn.repository.UserRepository;
@@ -44,50 +45,56 @@ public class VpnProvisionService {
     public void handleGetVpn(String chatId, TelegramLongPollingBot bot) {
         logger.info("Начало обработки команды 'Получить VPN' для chatId={}", chatId);
 
-        // Проверяем наличие незавершённой резервации
-        Optional<VpnClient> optionalPendingClient = vpnClientRepository.findFirstByChatIdAndReservedUntilAfter(chatId, LocalDateTime.now());
-        logger.debug("Результат проверки на наличие незавершённой резервации для chatId={}: {}", chatId, optionalPendingClient);
-
+        // Проверяем наличие незавершённой резервации или активной подписки
+        Optional<VpnClient> optionalPendingClient = vpnClientRepository.findFirstByChatId(chatId);
         if (optionalPendingClient.isPresent()) {
             VpnClient pendingClient = optionalPendingClient.get();
-            logger.info("Найдена незавершённая резервация для chatId={}: {}", chatId, pendingClient);
+            if (pendingClient.getReservedUntil() != null && pendingClient.getReservedUntil().isAfter(LocalDateTime.now())) {
+                logger.info("Найдена незавершённая резервация для chatId={}: {}", chatId, pendingClient);
 
-            // Если есть незавершённая резервация, отправляем сообщение с кнопкой
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText("У вас есть незавершённый платёж. Если хотите выбрать другой план подписки, нажмите на кнопку \"Выбрать другой план\".");
+                sendMessageWithResetOption(chatId, bot, "У вас есть незавершённый платёж. Если хотите выбрать другой план подписки, нажмите на кнопку \"Выбрать другой план\".");
+                return; // Завершаем выполнение метода
+            } else if (pendingClient.getExpirationDate() != null && pendingClient.getExpirationDate().isAfter(LocalDateTime.now())) {
+                logger.info("У пользователя {} уже есть активная подписка до {}", chatId, pendingClient.getExpirationDate());
 
-            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-            InlineKeyboardButton resetPlanButton = new InlineKeyboardButton("Выбрать другой план");
-            resetPlanButton.setCallbackData("reset_reservation");
-            markup.setKeyboard(Collections.singletonList(Collections.singletonList(resetPlanButton)));
-            message.setReplyMarkup(markup);
-
-            try {
-                bot.execute(message);
-                logger.info("Сообщение о незавершённой резервации успешно отправлено для chatId={}", chatId);
-            } catch (TelegramApiException e) {
-                logger.error("Ошибка отправки сообщения о незавершённой резервации для chatId={}: {}", chatId, e.getMessage(), e);
+                sendMessage(chatId, bot, "У вас уже есть активная подписка. Срок действия: " + pendingClient.getExpirationDate());
+                return; // Завершаем выполнение метода
             }
-            return; // Завершаем выполнение метода
         }
 
-        // Если резервации нет, запускаем процесс выбора устройства
+        // Если резервации и активной подписки нет, запускаем процесс выбора устройства
         logger.info("Резервации для chatId={} не найдено. Запуск процесса выбора устройства.", chatId);
         sendDeviceSelection(chatId);
     }
 
+    private void sendMessageWithResetOption(String chatId, TelegramLongPollingBot bot, String text) {
+        try {
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            message.setText(text);
+
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            InlineKeyboardButton resetButton = new InlineKeyboardButton("Сбросить резервацию");
+            resetButton.setCallbackData("reset_reservation");
+            markup.setKeyboard(Collections.singletonList(Collections.singletonList(resetButton)));
+
+            message.setReplyMarkup(markup);
+            bot.execute(message);
+        } catch (TelegramApiException e) {
+            logger.error("Ошибка отправки сообщения с кнопкой сброса: {}", e.getMessage(), e);
+        }
+    }
+
     @Transactional
     public void resetReservation(String chatId) {
-        // Находим последнюю активную резервацию пользователя
-        Optional<VpnClient> lastReservation = vpnClientRepository
-                .findFirstByChatIdAndReservedUntilAfter(chatId, LocalDateTime.now());
-
-        if (lastReservation.isPresent()) {
-            vpnClientRepository.delete(lastReservation.get()); // Удаляем только последнюю активную резервацию
-            logger.info("Резервация для chatId={} успешно сброшена.", chatId);
-        } else {
-            logger.warn("Для chatId={} нет активной резервации для сброса.", chatId);
+        Optional<VpnClient> client = vpnClientRepository.findFirstByChatId(chatId);
+        if (client.isPresent()) {
+            VpnClient vpnClient = client.get();
+            vpnClient.setReservedUntil(null);
+            vpnClient.setAssigned(false);
+            vpnClient.setPlan(null);
+            vpnClient.setExpirationDate(null);
+            vpnClientRepository.save(vpnClient);
         }
     }
 
@@ -116,28 +123,32 @@ public class VpnProvisionService {
 
     public void handleDeviceSelection(String chatId, String callbackData) {
         try {
-            String deviceType;
-            String osType = null; // Будет выбрано позже при выборе ОС
+            String deviceType = callbackData.equals("device_pc") ? "ПК" : "Смартфон";
 
-            // Обработка выбора устройства
-            if (callbackData.equals("device_pc")) {
-                deviceType = "ПК";
-            } else if (callbackData.equals("device_phone")) {
-                deviceType = "Смартфон";
-            } else {
-                throw new IllegalArgumentException("Некорректный выбор устройства");
-            }
+            // Ищем свободного клиента
+            VpnClient client = vpnClientRepository.findFirstByIsAssignedFalse()
+                    .orElseThrow(() -> new RuntimeException("Нет доступных клиентов для назначения."));
 
-            // Обновление данных пользователя в базе
-            updateDeviceForUser(chatId, deviceType, osType);
+            // Привязываем нового клиента к пользователю
+            client.setChatId(chatId);
+            client.setDeviceType(deviceType);
+            client.setAssigned(true);
+            client.setReservedUntil(null); // Очищаем резервацию, если была
+            vpnClientRepository.save(client);
+
+            logger.info("Клиент {} назначен пользователю {} с устройством {}.", client.getId(), chatId, deviceType);
 
             // Отправка сообщения с выбором ОС
             sendOsSelectionMessage(chatId, deviceType);
+        } catch (RuntimeException e) {
+            logger.error("Ошибка назначения клиента: {}", e.getMessage(), e);
+            sendErrorMessage(chatId, "Нет доступных клиентов. Попробуйте позже.");
         } catch (Exception e) {
-            logger.error("Ошибка при обработке выбора устройства: {}", e.getMessage(), e);
+            logger.error("Ошибка при выборе устройства: {}", e.getMessage(), e);
             sendErrorMessage(chatId, "Ошибка при выборе устройства. Попробуйте снова.");
         }
     }
+
 
     public void updateDeviceForUser(String chatId, String deviceType, String osType) {
         try {
@@ -195,30 +206,26 @@ public class VpnProvisionService {
 
     public void handleOsSelection(String chatId, String osType) {
         try {
-            VpnClient client = vpnClientRepository.findFirstByChatId(chatId)
+            // Ищем последнего назначенного клиента для пользователя
+            VpnClient client = vpnClientRepository.findFirstByChatIdAndIsAssignedTrueOrderByIdDesc(chatId)
                     .orElseThrow(() -> new RuntimeException("Клиент не найден для пользователя: " + chatId));
 
-            // Устанавливаем ОС и сохраняем
+            // Устанавливаем ОС
             client.setOsType(osType);
             vpnClientRepository.save(client);
 
-            logger.info("Пользователь {} выбрал ОС: {}", chatId, osType);
+            logger.info("Пользователь {} выбрал ОС {} для клиента {}.", chatId, osType, client.getId());
 
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText("Вы выбрали операционную систему: " + osType + ". Продолжайте настройку.");
-            telegramBotService.getBot().execute(message);
-
-            // Отправляем меню выбора плана подписки
             sendPlanSelectionMenu(chatId);
         } catch (RuntimeException e) {
             logger.error("Ошибка: {}", e.getMessage(), e);
-            sendErrorMessage(chatId, "Клиент не найден или отсутствуют доступные клиенты. Пожалуйста, попробуйте снова.");
-        } catch (TelegramApiException e) {
+            sendErrorMessage(chatId, "Ошибка при выборе ОС. Попробуйте позже.");
+        } catch (Exception e) {
             logger.error("Ошибка обработки выбора ОС: {}", e.getMessage(), e);
             sendErrorMessage(chatId, "Произошла ошибка при обработке выбора ОС. Попробуйте снова.");
         }
     }
+
 
     public void sendPlanSelectionMenu(String chatId) {
         try {
@@ -255,51 +262,43 @@ public class VpnProvisionService {
         }
     }
 
-    private String normalizePlan(String callbackData) {
-        switch (callbackData) {
-            case "plan_1_month":
-            case "1 месяц":
-                return "1_month";
-            case "plan_3_months":
-            case "3 месяца":
-                return "3_months";
-            case "plan_6_months":
-            case "6 месяцев":
-                return "6_months";
-            case "plan_1_year":
-            case "1 год":
-                return "1_year";
-            default:
-                throw new IllegalArgumentException("Unknown callbackData: " + callbackData);
-        }
-    }
-
     public void handlePlanSelection(String chatId, String callbackData, String username) {
         try {
-            // Преобразуем callbackData в формат плана
-            String plan = normalizePlan(callbackData);
+            // Нормализуем план
+            String normalizedPlan = normalizePlan(callbackData);
 
-            // Создаем или обновляем запись в vpn_clients
-            VpnClient client = vpnClientRepository.findFirstByChatId(chatId)
-                    .orElseGet(() -> {
-                        VpnClient newClient = new VpnClient();
-                        newClient.setChatId(chatId);
-                        return vpnClientRepository.save(newClient);
-                    });
+            // Ищем последнего назначенного клиента для пользователя
+            VpnClient client = vpnClientRepository.findFirstByChatIdAndIsAssignedTrueOrderByIdDesc(chatId)
+                    .orElseThrow(() -> new RuntimeException("Нет клиента для назначения плана."));
 
-            // Обновляем план и устанавливаем резервацию
-            client.setPlan(plan);
-            LocalDateTime reservedUntil = LocalDateTime.now().plusMinutes(15);
-            client.setReservedUntil(reservedUntil);
+            // Обновляем информацию о плане
+            client.setPlan(normalizedPlan);
+            client.setReservedUntil(LocalDateTime.now().plusMinutes(15));
             vpnClientRepository.save(client);
 
-            logger.info("Резервация установлена для chatId={}, reservedUntil={}", chatId, reservedUntil);
+            logger.info("Резервация плана {} установлена для клиента {} (пользователь {}).", normalizedPlan, client.getId(), chatId);
 
             // Переход к оплате
-            sendPaymentOptions(chatId, username, plan);
+            sendPaymentOptions(chatId, username, normalizedPlan);
         } catch (Exception e) {
             logger.error("Ошибка обработки выбора плана: {}", e.getMessage(), e);
             sendErrorMessage(chatId, "Произошла ошибка при обработке выбора плана. Попробуйте снова.");
+        }
+    }
+
+
+    private String normalizePlan(String callbackData) {
+        switch (callbackData) {
+            case "plan_1_month":
+                return "1_month";
+            case "plan_3_months":
+                return "3_months";
+            case "plan_6_months":
+                return "6_months";
+            case "plan_1_year":
+                return "1_year";
+            default:
+                throw new IllegalArgumentException("Unknown plan: " + callbackData);
         }
     }
 
@@ -326,6 +325,18 @@ public class VpnProvisionService {
             sendErrorMessage(chatId, "Произошла ошибка при создании кнопки для оплаты. Попробуйте позже.");
         }
     }
+
+    private void sendMessage(String chatId, TelegramLongPollingBot bot, String text) {
+        try {
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            message.setText(text);
+            bot.execute(message);
+        } catch (TelegramApiException e) {
+            logger.error("Ошибка отправки сообщения: {}", e.getMessage(), e);
+        }
+    }
+
 
     private void sendErrorMessage(String chatId, String text) {
         try {

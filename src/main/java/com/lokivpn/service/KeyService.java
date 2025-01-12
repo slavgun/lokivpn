@@ -57,7 +57,7 @@ public class KeyService {
                     String emoji;
                     if (client.isAssigned()) {
                         // Ключ активен
-                        emoji = client.getDeviceType() != null && client.getDeviceType().equalsIgnoreCase("pc") ? "🖥️" : "📱";
+                        emoji = client.getDeviceType() != null && (client.getDeviceType().equalsIgnoreCase("ПК") || client.getDeviceType().equalsIgnoreCase("pc")) ? "🖥️" : "📱";
                     } else if (client.getReservedUntil() != null && client.getReservedUntil().isAfter(LocalDateTime.now())) {
                         // Ключ зарезервирован
                         emoji = "🔑";

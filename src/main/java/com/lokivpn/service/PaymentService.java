@@ -32,9 +32,6 @@ public class PaymentService {
     @Value("${yookassa.secret-key}")
     private String secretKey;
 
-    @Autowired
-    private UserRepository userRepository;
-
     public String createPaymentLink(Long chatId, String username, String plan) {
         try {
             int price = calculatePrice(plan);
@@ -90,47 +87,18 @@ public class PaymentService {
         }
     }
 
-    public ResponseEntity<String> processWebhook(Map<String, Object> params) {
-        try {
-            Map<String, Object> object = (Map<String, Object>) params.get("object");
-            String status = (String) object.get("status");
-
-            if ("succeeded".equals(status)) {
-                Map<String, Object> metadata = (Map<String, Object>) object.get("metadata");
-                String chatId = (String) metadata.get("chat_id");
-                String username = (String) metadata.get("username");
-                String plan = (String) metadata.get("plan");
-
-                // Вызов логики активации подписки перенесен в контроллер
-                return ResponseEntity.ok("Webhook processed successfully");
-            }
-
-            return ResponseEntity.ok("Payment not yet completed");
-        } catch (Exception e) {
-            logger.error("Error processing webhook: ", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Error processing webhook: " + e.getMessage());
+    public int calculatePrice(String plan) {
+        switch (plan) {
+            case "1_month":
+                return 200;
+            case "3_months":
+                return 500;
+            case "6_months":
+                return 900;
+            case "1_year":
+                return 1600;
+            default:
+                throw new IllegalArgumentException("Invalid plan: " + plan);
         }
-    }
-
-    private int calculatePrice(String plan) {
-        return switch (plan) {
-            case "1_month" -> 200;
-            case "3_months" -> 500;
-            case "6_months" -> 900;
-            case "1_year" -> 1600;
-            default -> throw new IllegalArgumentException("Invalid plan");
-        };
-    }
-
-    private LocalDateTime calculateEndDate(String plan) {
-        LocalDateTime startDate = LocalDateTime.now();
-        return switch (plan) {
-            case "1_month" -> startDate.plusMonths(1);
-            case "3_months" -> startDate.plusMonths(3);
-            case "6_months" -> startDate.plusMonths(6);
-            case "1_year" -> startDate.plusYears(1);
-            default -> throw new IllegalArgumentException("Invalid plan");
-        };
     }
 }

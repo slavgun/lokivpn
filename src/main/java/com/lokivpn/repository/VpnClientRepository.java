@@ -72,6 +72,14 @@ public interface VpnClientRepository
 
     @Query("SELECT vc FROM VpnClient vc WHERE vc.chatId = :chatId AND (vc.isAssigned = TRUE OR (vc.reservedUntil IS NOT NULL AND vc.reservedUntil > CURRENT_TIMESTAMP))")
     List<VpnClient> findActiveAndReservedClientsByChatId(@Param("chatId") String chatId);
+
+    @Query("SELECT v FROM VpnClient v WHERE v.isAssigned = false AND (v.reservedUntil IS NULL OR v.reservedUntil < :now) ORDER BY v.id ASC")
+    List<VpnClient> findAvailableClients(@Param("now") LocalDateTime now);
+
+    // Найти клиента по chatId и плану с активной резервацией
+    Optional<VpnClient> findFirstByChatIdAndPlanAndReservedUntilAfter(String chatId, String plan, LocalDateTime now);
+
+    Optional<VpnClient> findFirstByChatIdAndIsAssignedTrueOrderByIdDesc(String chatId);
 }
 
 
