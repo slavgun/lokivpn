@@ -166,90 +166,72 @@ public class TelegramBotService {
 
     private void handleVpnRequest(String chatId) {
         Long chatIdLong = Long.parseLong(chatId);
-        Long userId = userRepository.findByChatId(chatIdLong)
-                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
-                .getId();
 
-        int userBalance = getUserBalance(userId);
-        int requiredAmount = 110; // Сумма в рублях
+        // Получаем пользователя по chatId
+        User user = userRepository.findByChatId(chatIdLong)
+                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
 
-        if (userBalance < requiredAmount) {
-            InlineKeyboardMarkup markup = createPaymentButtons();
-            messageSender.sendMessage(chatId,
-                    "У вас недостаточно средств на балансе. Пополните баланс через кнопки ниже.", markup);
+        // Проверяем доступность конфигурации
+        Optional<VpnClient> availableConfig = vpnConfigService.getAvailableVpnConfig(chatId);
+
+        if (availableConfig.isEmpty()) {
+            messageSender.sendMessage(chatId, "Нет доступных VPN-конфигураций. Попробуйте позже.");
             return;
         }
 
-        Optional<VpnClient> availableConfig = vpnConfigService.getAvailableVpnConfig(chatId);
+        VpnClient vpnClient = availableConfig.get();
 
-        if (availableConfig.isPresent()) {
-            VpnClient vpnClient = availableConfig.get();
+        // Привязываем клиента к пользователю
+        vpnClient.setAssigned(true);
+        vpnClient.setUserId(chatIdLong); // Используем chatId в качестве userId
+        vpnClientRepository.save(vpnClient);
 
-            // Привязываем клиента
-            vpnClient.setAssigned(true);
-            vpnClient.setUserId(userId);
-            vpnClientRepository.save(vpnClient);
+        // Увеличиваем счетчик клиентов у пользователя
+        user.setClientsCount(user.getClientsCount() + 1);
+        userRepository.save(user);
 
-            // Списываем баланс
-            updateUserBalance(userId, userBalance - requiredAmount);
+        // Отправляем уведомление
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        InlineKeyboardButton clientButton = new InlineKeyboardButton("Мои клиенты");
+        clientButton.setCallbackData("my_clients");
+        markup.setKeyboard(List.of(List.of(clientButton)));
 
-            // Увеличиваем счетчик клиентов
-            userRepository.incrementClientCount(userId);
-
-            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-            InlineKeyboardButton clientButton = new InlineKeyboardButton("Мои клиенты");
-            clientButton.setCallbackData("my_clients");
-            markup.setKeyboard(List.of(List.of(clientButton)));
-
-            messageSender.sendMessage(chatId,
-                    String.format("Клиент '%s' успешно привязан. Скачать конфиг можно в личном кабинете.",
-                            vpnClient.getClientName()),
-                    markup);
-        } else {
-            messageSender.sendMessage(chatId, "Нет доступных VPN-конфигураций. Попробуйте позже.");
-        }
+        messageSender.sendMessage(chatId,
+                String.format("Клиент '%s' успешно привязан. Скачать конфиг можно в личном кабинете.",
+                        vpnClient.getClientName()),
+                markup);
     }
 
     private void confirmVpnBinding(String chatId, Long vpnClientId) {
-        int requiredAmount = 110; // Минимальная сумма для привязки клиента
-        Long userId = userRepository.findByChatId(Long.parseLong(chatId))
-                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
-                .getId();
+        Long chatIdLong = Long.parseLong(chatId);
 
-        int userBalance = getUserBalance(Long.parseLong(chatId));
+        // Проверяем наличие конфигурации
+        Optional<VpnClient> optionalClient = vpnClientRepository.findById(vpnClientId);
 
-        if (userBalance < requiredAmount) {
-            messageSender.sendMessage(chatId, "У вас недостаточно средств на балансе для завершения операции.");
+        if (optionalClient.isEmpty()) {
+            messageSender.sendMessage(chatId, "Ошибка: не удалось найти VPN-конфигурацию. Попробуйте снова.");
             return;
         }
 
-        Optional<VpnClient> optionalClient = vpnClientRepository.findById(vpnClientId);
+        VpnClient vpnClient = optionalClient.get();
 
-        if (optionalClient.isPresent()) {
-            VpnClient vpnClient = optionalClient.get();
+        // Привязываем клиента к пользователю
+        vpnClient.setAssigned(true);
+        vpnClient.setUserId(chatIdLong); // Используем chatId в качестве userId
+        vpnClientRepository.save(vpnClient);
 
-            // Привязка клиента к пользователю
-            vpnClient.setAssigned(true);
-            vpnClient.setUserId(Long.parseLong(chatId));
-            vpnClientRepository.save(vpnClient);
+        // Отправляем уведомление
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        InlineKeyboardButton clientButton = new InlineKeyboardButton("Мои клиенты");
+        clientButton.setCallbackData("my_clients");
+        markup.setKeyboard(List.of(List.of(clientButton)));
 
-            // Снятие денег с баланса
-            updateUserBalance(userId, userBalance - requiredAmount);
-
-            // Уведомление пользователя
-            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-            InlineKeyboardButton clientButton = new InlineKeyboardButton("Мои клиенты");
-            clientButton.setCallbackData("my_clients");
-            markup.setKeyboard(List.of(List.of(clientButton)));
-
-            messageSender.sendMessage(chatId,
-                    String.format("Клиент '%s' успешно привязан. Скачать конфиг можно по кнопке ниже или в Личном кабинете.",
-                            vpnClient.getClientName()),
-                    markup);
-        } else {
-            messageSender.sendMessage(chatId, "Ошибка: не удалось найти VPN-конфигурацию. Попробуйте снова.");
-        }
+        messageSender.sendMessage(chatId,
+                String.format("Клиент '%s' успешно привязан. Скачать конфиг можно по кнопке ниже или в Личном кабинете.",
+                        vpnClient.getClientName()),
+                markup);
     }
+
 
     private void cancelVpnRequest(String chatId) {
         messageSender.sendMessage(chatId, "Операция отменена.");
@@ -352,7 +334,6 @@ public class TelegramBotService {
     }
 
 
-
     public void sendClientList(String chatId, Long userId) {
         List<VpnClient> clients = vpnConfigService.getClientsForUser(userId);
 
@@ -439,7 +420,6 @@ public class TelegramBotService {
                 .map(User::getBalance)
                 .orElse(0); // Возвращаем 0, если пользователь не найден
     }
-
 
     public void updateUserBalance(Long userId, int newBalance) {
         userRepository.updateBalanceByUserId(userId, newBalance);
