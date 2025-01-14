@@ -12,7 +12,6 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.payments.LabeledPrice;
 import org.telegram.telegrambots.meta.api.objects.payments.PreCheckoutQuery;
 import org.telegram.telegrambots.meta.api.objects.payments.SuccessfulPayment;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.util.List;
 import java.time.LocalDateTime;
 
@@ -34,6 +33,13 @@ public class PaymentService {
     }
 
     public void initiatePayment(String chatId, int amount) {
+        if (amount < 108) {
+            throw new IllegalArgumentException("Сумма платежа должна быть не менее 108 рублей.");
+        }
+
+        // Умножаем сумму на 100 для передачи в копейках
+        int amountInKopecks = amount * 100;
+
         SendInvoice invoice = new SendInvoice();
         invoice.setChatId(chatId);
         invoice.setTitle("Пополнение баланса");
@@ -41,8 +47,36 @@ public class PaymentService {
         invoice.setPayload("balance_topup_" + amount);
         invoice.setProviderToken(providerToken);
         invoice.setCurrency("RUB");
-        invoice.setPrices(List.of(new LabeledPrice("Пополнение баланса", amount * 100))); // Умножаем на 100 для копеек.
+        invoice.setPrices(List.of(new LabeledPrice("Пополнение баланса", amountInKopecks))); // сумма в копейках
 
+        // Запросить email и передать данные для чека
+        invoice.setNeedEmail(true);
+        invoice.setSendEmailToProvider(true);
+
+        // Формируем данные для чека с дополнительными полями
+        String providerData = String.format("""
+        {
+            "receipt": {
+                "items": [
+                    {
+                        "description": "Пополнение баланса",
+                        "quantity": "1",
+                        "amount": {
+                            "value": "%.2f",
+                            "currency": "RUB"
+                        },
+                        "vat_code": 1,
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service"
+                    }
+                ]
+            }
+        }
+        """, (double) amount); // сумма в рублях
+
+        invoice.setProviderData(providerData);
+
+        logger.info("Provider Data: {}", providerData); // Логирование
         messageSender.sendInvoice(invoice);
         logger.info("Счёт на оплату отправлен для chatId: {} на сумму: {} RUB", chatId, amount);
     }
@@ -77,8 +111,13 @@ public class PaymentService {
                 paymentRecord.setStatus("SUCCESS");
 
                 paymentRepository.save(paymentRecord);
-                logger.info("Платёж успешно сохранён: {}", paymentRecord);
 
+                // Обновление баланса пользователя
+                int currentBalance = getUserBalance(userId);
+                int newBalance = currentBalance + payment.getTotalAmount() / 100; // Перевод копеек в рубли
+                updateUserBalance(userId, newBalance);
+
+                logger.info("Платёж успешно обработан, новый баланс: {}", newBalance);
                 sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа
             } catch (NumberFormatException e) {
                 logger.error("Ошибка преобразования chatId в Long: {}", chatId, e);
@@ -88,6 +127,17 @@ public class PaymentService {
                 sendErrorMessage(chatId); // Отправка сообщения об ошибке
             }
         }
+    }
+
+    public int getUserBalance(Long userId) {
+        // Получение баланса из базы данных
+        Integer balance = paymentRepository.findBalanceByUserId(userId);
+        return balance != null ? balance : 0;
+    }
+
+    public void updateUserBalance(Long userId, int newBalance) {
+        // Обновление баланса пользователя в базе данных
+        paymentRepository.updateBalanceByUserId(userId, newBalance);
     }
 
 
