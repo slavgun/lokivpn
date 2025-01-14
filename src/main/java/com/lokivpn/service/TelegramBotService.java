@@ -288,7 +288,7 @@ public class TelegramBotService {
 
         String accountInfo = String.format(
                 "\uD83C\uDFE0 *Личный кабинет:*\n" +
-                        "🔹 _Кол-во конфигов:_ *%d*\n" +
+                        "🔹 _Кол\\-во конфигов:_ *%d*\n" +
                         "💳 _Баланс:_ *%d RUB*",
                 clientCount,
                 balance
@@ -323,10 +323,11 @@ public class TelegramBotService {
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
 
-        for (VpnClient client : clients) {
+        for (int i = 0; i < clients.size(); i++) {
+            VpnClient client = clients.get(i);
             InlineKeyboardButton clientButton = new InlineKeyboardButton();
-            clientButton.setText(client.getClientName());
-            clientButton.setCallbackData("\uD83D\uDCC4 Конфиг⮚ #" + client.getId()); // Уникальный идентификатор
+            clientButton.setText("Конфиг⮚ #" + (i + 1)); // Форматируем текст кнопки
+            clientButton.setCallbackData("client_" + client.getId()); // Используем оригинальный ID в callbackData
             rows.add(Collections.singletonList(clientButton));
         }
 
@@ -365,7 +366,7 @@ public class TelegramBotService {
         rows.add(List.of(unbindButton));
         inlineKeyboardMarkup.setKeyboard(rows);
 
-        sendMessage(chatId, "Клиент: " + client.getClientName(), inlineKeyboardMarkup);
+        sendMessage(chatId, "Выберите действие:", inlineKeyboardMarkup);
     }
 
     // Отвязка клиента
