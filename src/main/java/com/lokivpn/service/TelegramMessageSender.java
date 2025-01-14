@@ -28,6 +28,8 @@ public class TelegramMessageSender {
         this.bot = bot;
     }
 
+// Методы для отправки сообщений
+
     public void sendMessage(String chatId, String text) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(chatId);
@@ -76,6 +78,7 @@ public class TelegramMessageSender {
         }
     }
 
+    // Отправка уведомления
     public void sendNotification(Long userId, String message) {
         try {
             String chatId = String.valueOf(userId);
@@ -89,6 +92,8 @@ public class TelegramMessageSender {
             logger.error("Failed to send notification to user {}: {}", userId, e.getMessage(), e);
         }
     }
+
+// Методы отправки конфигураций
 
     public File getConfigFile(VpnClient vpnClient) {
         String remoteFilePath = vpnClient.getConfigFile();

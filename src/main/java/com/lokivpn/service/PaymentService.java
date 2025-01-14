@@ -146,12 +146,12 @@ public class PaymentService {
     }
 
     private void sendPaymentConfirmation(String chatId) {
-        String message = "Ваш платёж успешно обработан! Ваш баланс пополнен.";
+        String message = "Ваш баланс пополнен.\uD83C\uDF89";
         messageSender.sendMessage(chatId, message);
     }
 
     private void sendErrorMessage(String chatId) {
-        String message = "Произошла ошибка при обработке вашего платежа. Пожалуйста, свяжитесь с поддержкой.";
+        String message = "❌ Произошла ошибка при обработке вашего платежа. Пожалуйста, свяжитесь с поддержкой.";
         messageSender.sendMessage(chatId, message);
     }
 }

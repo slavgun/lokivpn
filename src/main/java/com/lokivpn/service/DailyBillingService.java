@@ -1,8 +1,6 @@
 package com.lokivpn.service;
 
 import com.lokivpn.model.User;
-import com.lokivpn.model.VpnClient;
-import com.lokivpn.repository.PaymentRepository;
 import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
 import jakarta.transaction.Transactional;
@@ -12,8 +10,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
-import java.util.List;
 
 @Service
 public class DailyBillingService {
@@ -44,7 +40,6 @@ public class DailyBillingService {
             pageable = pageable.next(); // Переход к следующей странице
         } while (usersPage.hasNext());
     }
-
 
     private void processUser(User user) {
         int balance = user.getBalance();
@@ -91,18 +86,18 @@ public class DailyBillingService {
         processUser(user);
     }
 
-
     @Async
     public void sendLowBalanceNotification(Long chatId) {
         telegramMessageSender.sendNotification(chatId,
-                "У вас заканчиваются средства на балансе для оплаты клиентов. " +
-                        "Пополните баланс в личном кабинете. Если не совершите платеж в течение 3 дней, клиенты будут удалены.");
+                "💳 У вас заканчиваются средства на балансе для оплаты клиентов.\n" +
+                        "🔄 Пополните баланс в личном кабинете.\n" +
+                        "🕒 Если не совершите платеж в течение 3 дней, клиенты будут удалены.");
     }
 
     @Async
     public void sendClientsRemovedNotification(Long chatId) {
         telegramMessageSender.sendNotification(chatId,
-                "Ваши клиенты были удалены из кабинета из-за отсутствия средств на оплату.");
+                "❌ Ваши клиенты были удалены из кабинета из-за отсутствия средств на оплату.");
     }
 }
 
