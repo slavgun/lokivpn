@@ -1,104 +1,103 @@
 package com.lokivpn.service;
 
-import com.lokivpn.model.User;
-import com.lokivpn.repository.UserRepository;
+import com.lokivpn.model.PaymentRecord;
+import com.lokivpn.repository.PaymentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.time.LocalDateTime;
-import java.util.HashMap;
+import org.telegram.telegrambots.meta.api.methods.AnswerPreCheckoutQuery;
+import org.telegram.telegrambots.meta.api.methods.invoices.SendInvoice;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.payments.LabeledPrice;
+import org.telegram.telegrambots.meta.api.objects.payments.PreCheckoutQuery;
+import org.telegram.telegrambots.meta.api.objects.payments.SuccessfulPayment;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.time.LocalDateTime;
 
 @Service
 public class PaymentService {
 
     private static final Logger logger = LoggerFactory.getLogger(PaymentService.class);
 
-    @Value("${yookassa.shop-id}")
-    private String shopId;
+    @Value("${telegram.provider-token}")
+    private String providerToken;
 
-    @Value("${yookassa.secret-key}")
-    private String secretKey;
+    private final TelegramMessageSender messageSender;
+    private final PaymentRepository paymentRepository;
 
-    public String createPaymentLink(Long chatId, String username, String plan) {
-        try {
-            int price = calculatePrice(plan);
-            String orderId = UUID.randomUUID().toString();
+    public PaymentService(TelegramMessageSender messageSender,
+                          PaymentRepository paymentRepository) {
+        this.messageSender = messageSender;
+        this.paymentRepository = paymentRepository;
+    }
 
-            // Формирование тела запроса
-            Map<String, Object> paymentRequest = new HashMap<>();
-            paymentRequest.put("amount", Map.of("value", String.format("%.2f", price / 100.0), "currency", "RUB"));
-            paymentRequest.put("capture", true);
-            paymentRequest.put("confirmation", Map.of("type", "redirect", "return_url", "https://your-return-url.com"));
-            paymentRequest.put("description", "VPN Subscription: " + plan);
+    public void initiatePayment(String chatId, int amount) {
+        SendInvoice invoice = new SendInvoice();
+        invoice.setChatId(chatId);
+        invoice.setTitle("Пополнение баланса");
+        invoice.setDescription("Пополнение баланса для получения VPN-конфигураций.");
+        invoice.setPayload("balance_topup_" + amount);
+        invoice.setProviderToken(providerToken);
+        invoice.setCurrency("RUB");
+        invoice.setPrices(List.of(new LabeledPrice("Пополнение баланса", amount * 100))); // Умножаем на 100 для копеек.
 
-            // Добавляем информацию о чеке
-            Map<String, Object> receipt = new HashMap<>();
-            receipt.put("items", List.of(Map.of(
-                    "description", "VPN Subscription: " + plan,
-                    "quantity", 1,
-                    "amount", Map.of("value", String.format("%.2f", price / 100.0), "currency", "RUB"),
-                    "vat_code", 4, // Без НДС
-                    "payment_subject", "service", // Услуга
-                    "payment_mode", "full_payment" // Полная оплата
-            )));
-            receipt.put("customer", Map.of(
-                    "email", "slavgun@bk.ru" // Email пользователя
-            ));
-            paymentRequest.put("receipt", receipt);
+        messageSender.sendInvoice(invoice);
+        logger.info("Счёт на оплату отправлен для chatId: {} на сумму: {} RUB", chatId, amount);
+    }
 
-            // Добавляем метаданные (chatId и username)
-            Map<String, String> metadata = new HashMap<>();
-            metadata.put("chat_id", String.valueOf(chatId));
-            metadata.put("username", username);
-            paymentRequest.put("metadata", metadata);
+    public void handlePreCheckoutQuery(Update update) {
+        if (update.hasPreCheckoutQuery()) {
+            PreCheckoutQuery query = update.getPreCheckoutQuery();
+            AnswerPreCheckoutQuery answer = new AnswerPreCheckoutQuery();
+            answer.setOk(true);
+            answer.setPreCheckoutQueryId(query.getId());
 
-            // Отправка запроса
-            RestTemplate restTemplate = new RestTemplate();
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBasicAuth(shopId, secretKey);
-            headers.add("Idempotence-Key", UUID.randomUUID().toString());
-
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(paymentRequest, headers);
-
-            String url = "https://api.yookassa.ru/v3/payments";
-            Map<String, Object> response = restTemplate.postForObject(url, request, Map.class);
-
-            // Получение URL подтверждения
-            Map<String, String> confirmation = (Map<String, String>) response.get("confirmation");
-            return confirmation.get("confirmation_url");
-
-        } catch (Exception e) {
-            logger.error("Error creating payment link: ", e);
-            throw new RuntimeException("Error creating payment link", e);
+            messageSender.sendPreCheckoutQuery(answer);
+            logger.info("PreCheckoutQuery успешно обработан для пользователя: {}", query.getFrom().getId());
         }
     }
 
-    public int calculatePrice(String plan) {
-        switch (plan) {
-            case "1_month":
-                return 200;
-            case "3_months":
-                return 500;
-            case "6_months":
-                return 900;
-            case "1_year":
-                return 1600;
-            default:
-                throw new IllegalArgumentException("Invalid plan: " + plan);
+    public void handleSuccessfulPayment(Update update) {
+        if (update.getMessage().hasSuccessfulPayment()) {
+            SuccessfulPayment payment = update.getMessage().getSuccessfulPayment();
+            String chatId = update.getMessage().getChatId().toString();
+
+            try {
+                Long userId = Long.parseLong(chatId);
+
+                // Сохранение информации о платеже в базу данных
+                PaymentRecord paymentRecord = new PaymentRecord();
+                paymentRecord.setUserId(userId);
+                paymentRecord.setAmount(payment.getTotalAmount());
+                paymentRecord.setCurrency(payment.getCurrency());
+                paymentRecord.setPaymentDate(LocalDateTime.now());
+                paymentRecord.setProviderPaymentId(payment.getProviderPaymentChargeId());
+                paymentRecord.setStatus("SUCCESS");
+
+                paymentRepository.save(paymentRecord);
+                logger.info("Платёж успешно сохранён: {}", paymentRecord);
+
+                sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа
+            } catch (NumberFormatException e) {
+                logger.error("Ошибка преобразования chatId в Long: {}", chatId, e);
+                sendErrorMessage(chatId); // Отправка сообщения об ошибке
+            } catch (Exception e) {
+                logger.error("Ошибка сохранения платежа: {}", e.getMessage(), e);
+                sendErrorMessage(chatId); // Отправка сообщения об ошибке
+            }
         }
+    }
+
+
+    private void sendPaymentConfirmation(String chatId) {
+        String message = "Ваш платёж успешно обработан! Ваш баланс пополнен.";
+        messageSender.sendMessage(chatId, message);
+    }
+
+    private void sendErrorMessage(String chatId) {
+        String message = "Произошла ошибка при обработке вашего платежа. Пожалуйста, свяжитесь с поддержкой.";
+        messageSender.sendMessage(chatId, message);
     }
 }

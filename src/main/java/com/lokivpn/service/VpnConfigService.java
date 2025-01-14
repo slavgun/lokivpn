@@ -1,54 +1,63 @@
 package com.lokivpn.service;
 
+import com.lokivpn.model.PaymentRecord;
 import com.lokivpn.model.VpnClient;
+import com.lokivpn.repository.PaymentRepository;
+import com.lokivpn.repository.VpnClientRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import java.io.File;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.List;
+import java.util.Optional;
+import java.util.Scanner;
 
 @Service
 public class VpnConfigService {
 
-    public File getConfigFile(VpnClient vpnClient) {
-        String remoteFilePath = vpnClient.getConfigFile();
-        String localFilePath = "/tmp/" + vpnClient.getClientName() + ".conf";
-        try {
-            // Используем SCP для загрузки файла
-            Process process = Runtime.getRuntime().exec(new String[]{
-                    "scp", "root@46.29.234.231:" + remoteFilePath, localFilePath
-            });
-            process.waitFor();
+    private static final Logger logger = LoggerFactory.getLogger(VpnConfigService.class);
 
-            // Проверяем, что файл был скачан
-            File file = new File(localFilePath);
-            if (file.exists()) {
-                return file;
+    private final VpnClientRepository vpnClientRepository;
+
+    public VpnConfigService(VpnClientRepository vpnClientRepository) {
+        this.vpnClientRepository = vpnClientRepository;
+    }
+
+    public Optional<VpnClient> getAvailableVpnConfig() {
+        try {
+            // Получение первой доступной конфигурации из базы данных
+            Optional<VpnClient> optionalClient = vpnClientRepository.findFirstByAssignedFalse();
+
+            if (optionalClient.isPresent()) {
+                VpnClient vpnClient = optionalClient.get();
+
+                // Логирование пути конфигурации
+                logger.info("Selected config file path: {}", vpnClient.getConfigFile());
+
+                // Пометка конфигурации как выданной
+                vpnClient.setAssigned(true);
+                vpnClientRepository.save(vpnClient);
+
+                logger.info("VPN конфигурация назначена клиенту: {}", vpnClient.getClientName());
+                return Optional.of(vpnClient);
             } else {
-                throw new RuntimeException("Не удалось скачать файл конфигурации.");
+                logger.warn("Нет доступных VPN конфигураций");
+                return Optional.empty();
             }
         } catch (Exception e) {
-            throw new RuntimeException("Ошибка при загрузке файла конфигурации: " + e.getMessage(), e);
+            logger.error("Ошибка получения VPN конфигурации: {}", e.getMessage(), e);
+            return Optional.empty();
         }
     }
 
-    public File getQrCodeFile(VpnClient vpnClient) {
-        String remoteFilePath = vpnClient.getQrCodePath();
-        String localFilePath = "/tmp/" + vpnClient.getClientName() + "_qrcode.png";
-        try {
-            // Используем SCP для загрузки файла
-            Process process = Runtime.getRuntime().exec(new String[]{
-                    "scp", "root@46.29.234.231:" + remoteFilePath, localFilePath
-            });
-            process.waitFor();
-
-            // Проверяем, что файл был скачан
-            File file = new File(localFilePath);
-            if (file.exists()) {
-                return file;
-            } else {
-                throw new RuntimeException("Не удалось скачать QR-код.");
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Ошибка при загрузке QR-кода: " + e.getMessage(), e);
-        }
+    public List<VpnClient> getClientsForUser(Long userId) {
+        return vpnClientRepository.findByUserId(userId);
     }
+
 }

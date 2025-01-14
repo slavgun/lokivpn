@@ -44,7 +44,7 @@
         <dependency>
             <groupId>org.telegram</groupId>
             <artifactId>telegrambots</artifactId>
-            <version>6.5.0</version>
+            <version>6.6.0</version>
         </dependency>
 
         <!-- SSH -->
@@ -53,6 +53,7 @@
             <artifactId>jsch</artifactId>
             <version>0.1.55</version>
         </dependency>
+
         <!-- QR Code -->
         <dependency>
             <groupId>com.google.zxing</groupId>
@@ -63,6 +64,14 @@
             <groupId>com.google.zxing</groupId>
             <artifactId>javase</artifactId>
             <version>3.4.1</version>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.30</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 
