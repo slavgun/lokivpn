@@ -1,8 +1,12 @@
 package com.lokivpn.service;
 
+import com.lokivpn.model.User;
 import com.lokivpn.model.VpnClient;
 import com.lokivpn.repository.PaymentRepository;
+import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,22 +28,28 @@ public class TelegramBotService {
 
     private static final Logger logger = LoggerFactory.getLogger(TelegramBotService.class);
 
+    @PersistenceContext
+    private EntityManager entityManager;
+
     private final TelegramMessageSender messageSender;
     private final PaymentService paymentService;
     private final VpnConfigService vpnConfigService;
     private final VpnClientRepository vpnClientRepository;
     private final PaymentRepository paymentRepository;
+    private final UserRepository userRepository;
 
     public TelegramBotService(TelegramMessageSender messageSender,
                               PaymentService paymentService,
                               VpnConfigService vpnConfigService,
                               VpnClientRepository vpnClientRepository,
-                              PaymentRepository paymentRepository) {
+                              PaymentRepository paymentRepository,
+                              UserRepository userRepository) {
         this.messageSender = messageSender;
         this.paymentService = paymentService;
         this.vpnConfigService = vpnConfigService;
         this.vpnClientRepository = vpnClientRepository;
         this.paymentRepository = paymentRepository;
+        this.userRepository = userRepository;
     }
 
     public void processUpdate(Update update) {
@@ -69,6 +79,30 @@ public class TelegramBotService {
 
             switch (text) {
                 case "/start":
+                    org.telegram.telegrambots.meta.api.objects.User telegramUser = update.getMessage().getFrom(); // Telegram User
+                    if (telegramUser == null) {
+                        logger.error("Не удалось получить информацию о пользователе из сообщения.");
+                        messageSender.sendMessage(chatId, "Ошибка: не удалось получить информацию о вашем аккаунте. Попробуйте позже.");
+                        return;
+                    }
+
+                    // Проверяем, существует ли пользователь в таблице users
+                    Long chatIdLong = Long.parseLong(chatId);
+                    Optional<User> existingUser = userRepository.findByChatId(chatIdLong);
+                    if (existingUser.isEmpty()) {
+                        // Добавляем нового пользователя в таблицу users
+                        User newUser = new User();
+                        newUser.setChatId(chatIdLong);
+                        newUser.setUsername(telegramUser.getUserName() != null ? telegramUser.getUserName() : "unknown");
+                        newUser.setBalance(0); // Изначально баланс равен 0
+                        newUser.setClientsCount(0); // Изначально клиентов нет
+
+                        userRepository.save(newUser);
+                        logger.info("Новый пользователь добавлен: {}", newUser);
+                    } else {
+                        logger.info("Пользователь с chatId {} уже существует.", chatId);
+                    }
+
                     sendWelcomeMessage(chatId);
                     break;
                 default:
@@ -116,6 +150,10 @@ public class TelegramBotService {
                     confirmVpnBinding(chatId, vpnClientId);
                 } else if (data.startsWith("cancel_vpn")) {
                     cancelVpnRequest(chatId);
+                } else if (data.startsWith("unbind_client_")) {
+                    Long clientId = Long.parseLong(data.split("_")[2]);
+                    unbindClient(chatId, clientId);
+                    return;
                 } else {
                     logger.warn("Unknown callback data: {}", data);
                     messageSender.sendMessage(chatId, "Неизвестная команда.");
@@ -127,40 +165,57 @@ public class TelegramBotService {
 //Получить VPN
 
     private void handleVpnRequest(String chatId) {
-        // Проверить баланс пользователя
-        Long userId = Long.parseLong(chatId);
-        int userBalance = getUserBalance(userId); // Метод для получения баланса пользователя
-        int requiredAmount = 110; // Минимальная сумма для привязки клиента
+        Long chatIdLong = Long.parseLong(chatId);
+        Long userId = userRepository.findByChatId(chatIdLong)
+                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
+                .getId();
+
+        int userBalance = getUserBalance(userId);
+        int requiredAmount = 110; // Сумма в рублях
 
         if (userBalance < requiredAmount) {
-            // Недостаточно средств
             InlineKeyboardMarkup markup = createPaymentButtons();
             messageSender.sendMessage(chatId,
-                    "У вас недостаточно средств на балансе, пожалуйста, пополните на нужную сумму через кнопки ниже.",
-                    markup);
+                    "У вас недостаточно средств на балансе. Пополните баланс через кнопки ниже.", markup);
             return;
         }
 
-        // Найти доступный VPN-клиент
         Optional<VpnClient> availableConfig = vpnConfigService.getAvailableVpnConfig(chatId);
 
         if (availableConfig.isPresent()) {
             VpnClient vpnClient = availableConfig.get();
 
-            // Уведомление о готовности привязать клиента
-            InlineKeyboardMarkup confirmationMarkup = createConfirmationButtons(vpnClient.getId());
+            // Привязываем клиента
+            vpnClient.setAssigned(true);
+            vpnClient.setUserId(userId);
+            vpnClientRepository.save(vpnClient);
+
+            // Списываем баланс
+            updateUserBalance(userId, userBalance - requiredAmount);
+
+            // Увеличиваем счетчик клиентов
+            userRepository.incrementClientCount(userId);
+
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            InlineKeyboardButton clientButton = new InlineKeyboardButton("Мои клиенты");
+            clientButton.setCallbackData("my_clients");
+            markup.setKeyboard(List.of(List.of(clientButton)));
+
             messageSender.sendMessage(chatId,
-                    String.format("Для привязки клиента '%s' будет списано %d RUB. Подтвердите операцию.",
-                            vpnClient.getClientName(), requiredAmount),
-                    confirmationMarkup);
+                    String.format("Клиент '%s' успешно привязан. Скачать конфиг можно в личном кабинете.",
+                            vpnClient.getClientName()),
+                    markup);
         } else {
-            // Нет доступных конфигураций
-            messageSender.sendMessage(chatId, "К сожалению, нет доступных VPN-конфигураций. Пожалуйста, попробуйте позже.");
+            messageSender.sendMessage(chatId, "Нет доступных VPN-конфигураций. Попробуйте позже.");
         }
     }
 
     private void confirmVpnBinding(String chatId, Long vpnClientId) {
         int requiredAmount = 110; // Минимальная сумма для привязки клиента
+        Long userId = userRepository.findByChatId(Long.parseLong(chatId))
+                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
+                .getId();
+
         int userBalance = getUserBalance(Long.parseLong(chatId));
 
         if (userBalance < requiredAmount) {
@@ -179,7 +234,7 @@ public class TelegramBotService {
             vpnClientRepository.save(vpnClient);
 
             // Снятие денег с баланса
-            updateUserBalance(chatId, userBalance - requiredAmount);
+            updateUserBalance(userId, userBalance - requiredAmount);
 
             // Уведомление пользователя
             InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
@@ -268,23 +323,15 @@ public class TelegramBotService {
 //Личный кабинет
 
     private void sendAccountInfo(String chatId, Long userId) {
-        int balanceInKopecks = getUserBalance(userId);
-        int balanceInRubles = balanceInKopecks / 100; // Преобразование копеек в рубли
-
-        // Получение даты последнего платежа
-        LocalDateTime lastPaymentDateTime = paymentRepository.findLastPaymentDateByUserId(userId);
-        String lastPaymentDate = lastPaymentDateTime != null
-                ? lastPaymentDateTime.format(DateTimeFormatter.ofPattern("dd\\.MM\\.yyyy")) // Экранирование точки
-                : "Нет данных";
+        int balance = getUserBalance(Long.parseLong(chatId)); // Преобразуем chatId в Long
+        int clientCount = vpnClientRepository.countByUserId(userId);
 
         String accountInfo = String.format(
                 "💼 *Ваш личный кабинет:*\n" +
                         "🔹 _Активные VPN:_ *%d*\n" +
-                        "💰 _Баланс:_ *%d RUB*\n" +
-                        "📅 _Последняя оплата:_ *%s*",
-                vpnConfigService.getClientsForUser(userId).size(),
-                balanceInRubles,
-                lastPaymentDate
+                        "💰 _Баланс:_ *%d RUB*",
+                clientCount,
+                balance
         );
 
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
@@ -301,9 +348,9 @@ public class TelegramBotService {
                 List.of(myClientsButton)
         ));
 
-        // Использование TelegramMessageSender для отправки сообщения
         messageSender.sendMessage(chatId, accountInfo, inlineKeyboardMarkup, "MarkdownV2");
     }
+
 
 
     public void sendClientList(String chatId, Long userId) {
@@ -350,11 +397,34 @@ public class TelegramBotService {
         qrButton.setText("Скачать QR код");
         qrButton.setCallbackData("download_qr_" + client.getId());
 
+        InlineKeyboardButton unbindButton = new InlineKeyboardButton();
+        unbindButton.setText("Отвязать клиента");
+        unbindButton.setCallbackData("unbind_client_" + client.getId());
+
         rows.add(List.of(configButton, qrButton));
+        rows.add(List.of(unbindButton));
         inlineKeyboardMarkup.setKeyboard(rows);
 
         sendMessage(chatId, "Клиент: " + client.getClientName(), inlineKeyboardMarkup);
     }
+
+    private void unbindClient(String chatId, Long clientId) {
+        // Находим клиента
+        VpnClient client = vpnClientRepository.findById(clientId)
+                .orElseThrow(() -> new RuntimeException("Клиент не найден, хотя он отображается у пользователя."));
+
+        // Убираем привязку клиента
+        client.setAssigned(false);
+        client.setUserId(null);
+        vpnClientRepository.save(client);
+
+        // Уменьшаем счетчик клиентов
+        userRepository.decrementClientCount(Long.parseLong(chatId));
+
+        // Сообщаем об успехе
+        sendMessage(chatId, String.format("Клиент '%s' успешно отвязан.", client.getClientName()));
+    }
+
 
     private void sendPaymentRequestMessage(String chatId) {
         String messageText = "Выберите нужную сумму пополнения, нажмите на кнопку с выбранной суммой и произведите оплату.";
@@ -364,13 +434,18 @@ public class TelegramBotService {
         messageSender.sendMessage(chatId, messageText, markup);
     }
 
-    public int getUserBalance(Long userId) {
-        Integer balance = paymentRepository.findBalanceByUserId(userId);
-        return balance != null ? balance : 0;
+    public int getUserBalance(Long chatId) {
+        return userRepository.findByChatId(chatId)
+                .map(User::getBalance)
+                .orElse(0); // Возвращаем 0, если пользователь не найден
     }
 
-    private void updateUserBalance(String chatId, int newBalance) {
-        paymentRepository.updateBalanceByUserId(Long.parseLong(chatId), newBalance);
+
+    public void updateUserBalance(Long userId, int newBalance) {
+        userRepository.updateBalanceByUserId(userId, newBalance);
+        // Принудительный сброс контекста для актуализации данных
+        entityManager.flush();
+        entityManager.clear();
     }
 
 //Скачивание QR кода и конфига

@@ -33,8 +33,5 @@ public class PaymentRecord {
 
     @Column(name = "status", nullable = false)
     private String status;
-
-    @Column(name = "balance", nullable = false)
-    private int balance; // Баланс пользователя
 }
 

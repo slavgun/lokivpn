@@ -1,7 +1,9 @@
 package com.lokivpn.service;
 
 import com.lokivpn.model.PaymentRecord;
+import com.lokivpn.model.User;
 import com.lokivpn.repository.PaymentRepository;
+import com.lokivpn.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,11 +27,14 @@ public class PaymentService {
 
     private final TelegramMessageSender messageSender;
     private final PaymentRepository paymentRepository;
+    private final UserRepository userRepository;
 
     public PaymentService(TelegramMessageSender messageSender,
-                          PaymentRepository paymentRepository) {
+                          PaymentRepository paymentRepository,
+                          UserRepository userRepository) {
         this.messageSender = messageSender;
         this.paymentRepository = paymentRepository;
+        this.userRepository = userRepository;
     }
 
     public void initiatePayment(String chatId, int amount) {
@@ -97,14 +102,18 @@ public class PaymentService {
         if (update.getMessage().hasSuccessfulPayment()) {
             SuccessfulPayment payment = update.getMessage().getSuccessfulPayment();
             String chatId = update.getMessage().getChatId().toString();
+            Long chatIdLong = Long.parseLong(chatId);
 
             try {
-                Long userId = Long.parseLong(chatId);
+                Long userId = userRepository.findByChatId(chatIdLong)
+                        .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
+                        .getId();
 
-                // Сохранение информации о платеже в базу данных
+
+                // Сохранение информации о платеже в таблицу payments
                 PaymentRecord paymentRecord = new PaymentRecord();
                 paymentRecord.setUserId(userId);
-                paymentRecord.setAmount(payment.getTotalAmount());
+                paymentRecord.setAmount(payment.getTotalAmount()); // Сумма в копейках
                 paymentRecord.setCurrency(payment.getCurrency());
                 paymentRecord.setPaymentDate(LocalDateTime.now());
                 paymentRecord.setProviderPaymentId(payment.getProviderPaymentChargeId());
@@ -114,32 +123,27 @@ public class PaymentService {
 
                 // Обновление баланса пользователя
                 int currentBalance = getUserBalance(userId);
-                int newBalance = currentBalance + payment.getTotalAmount() / 100; // Перевод копеек в рубли
+                int newBalance = currentBalance + payment.getTotalAmount() / 100; // Конвертация в рубли
                 updateUserBalance(userId, newBalance);
 
                 logger.info("Платёж успешно обработан, новый баланс: {}", newBalance);
                 sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа
-            } catch (NumberFormatException e) {
-                logger.error("Ошибка преобразования chatId в Long: {}", chatId, e);
-                sendErrorMessage(chatId); // Отправка сообщения об ошибке
             } catch (Exception e) {
-                logger.error("Ошибка сохранения платежа: {}", e.getMessage(), e);
+                logger.error("Ошибка обработки платежа: {}", e.getMessage(), e);
                 sendErrorMessage(chatId); // Отправка сообщения об ошибке
             }
         }
     }
 
     public int getUserBalance(Long userId) {
-        // Получение баланса из базы данных
-        Integer balance = paymentRepository.findBalanceByUserId(userId);
-        return balance != null ? balance : 0;
+        return userRepository.findById(userId)
+                .map(User::getBalance)
+                .orElse(0); // Если пользователь не найден, вернуть 0
     }
 
-    public void updateUserBalance(Long userId, int newBalance) {
-        // Обновление баланса пользователя в базе данных
-        paymentRepository.updateBalanceByUserId(userId, newBalance);
+    private void updateUserBalance(Long userId, int newBalance) {
+        userRepository.updateBalanceByUserId(userId, newBalance);
     }
-
 
     private void sendPaymentConfirmation(String chatId) {
         String message = "Ваш платёж успешно обработан! Ваш баланс пополнен.";
