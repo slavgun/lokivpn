@@ -4,6 +4,8 @@ import com.lokivpn.model.User;
 import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +15,8 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class DailyBillingService {
+
+    private static final Logger logger = LoggerFactory.getLogger(DailyBillingService.class);
 
     private final UserRepository userRepository;
     private final VpnClientRepository vpnClientRepository;
@@ -29,27 +33,41 @@ public class DailyBillingService {
     @Scheduled(cron = "0 0 0 * * ?")
     @Transactional
     public void processDailyBalances() {
-        Pageable pageable = PageRequest.of(0, 100); // Размер страницы: 100
+        logger.info("Начало процесса биллинга...");
+
+        Pageable pageable = PageRequest.of(0, 100);
         Page<User> usersPage;
 
         do {
-            usersPage = userRepository.findUsersWithActiveClients(pageable);
+            usersPage = userRepository.findAll(pageable);
             for (User user : usersPage.getContent()) {
-                processUserAsync(user);
+                try {
+                    processUser(user);
+                } catch (Exception e) {
+                    logger.error("Ошибка обработки пользователя {}: {}", user.getId(), e.getMessage());
+                }
             }
-            pageable = pageable.next(); // Переход к следующей странице
+            pageable = pageable.next();
         } while (usersPage.hasNext());
+
+        logger.info("Процесс биллинга завершен.");
     }
 
-    private void processUser(User user) {
-        int balance = user.getBalance();
-        int clientsCount = user.getClientsCount();
+    protected void processUser(User user) {
+        // Используем chatId вместо id
+        Long chatId = user.getChatId();
+        int clientsCount = vpnClientRepository.countByUserId(chatId);
         int dailyCharge = clientsCount * 5;
 
+        logger.info("Обработка пользователя {}: баланс={}, клиенты={}, списание={}",
+                chatId, user.getBalance(), clientsCount, dailyCharge);
+
         if (clientsCount == 0) {
-            // Если нет клиентов, пропускаем пользователя
+            logger.info("У пользователя {} нет клиентов, пропускаем.", chatId);
             return;
         }
+
+        int balance = user.getBalance();
 
         if (balance >= dailyCharge) {
             handleSufficientBalance(user, dailyCharge);
@@ -58,48 +76,43 @@ public class DailyBillingService {
         }
     }
 
+
     private void handleSufficientBalance(User user, int dailyCharge) {
-        // Списываем средства
         user.setBalance(user.getBalance() - dailyCharge);
         userRepository.save(user);
+        logger.info("Успешно списано {} с пользователя {}. Новый баланс: {}", dailyCharge, user.getChatId(), user.getBalance());
 
-        // Если баланс ниже трех дней расходов, отправляем уведомление
         if (user.getBalance() <= dailyCharge * 3) {
             sendLowBalanceNotification(user.getChatId());
         }
     }
 
     private void handleInsufficientBalance(User user) {
-        // Bulk-операция для отвязывания всех клиентов пользователя
-        vpnClientRepository.unassignClientsByUserId(user.getId());
-
-        // Обнуляем количество клиентов
-        user.setClientsCount(0);
-        userRepository.save(user);
-
-        // Отправляем уведомление пользователю
+        vpnClientRepository.unassignClientsByUserId(user.getChatId());
+        logger.warn("Клиенты пользователя {} были удалены из-за недостатка средств.", user.getChatId());
         sendClientsRemovedNotification(user.getChatId());
     }
 
     @Async
-    public void processUserAsync(User user) {
-        processUser(user);
-    }
-
-    @Async
     public void sendLowBalanceNotification(Long chatId) {
-        telegramMessageSender.sendNotification(chatId,
-                "💳 У вас заканчиваются средства на балансе для оплаты клиентов.\n" +
-                        "🔄 Пополните баланс в личном кабинете.\n" +
-                        "🕒 Если не совершите платеж в течение 3 дней, клиенты будут удалены.");
+        try {
+            telegramMessageSender.sendNotification(chatId,
+                    "💳 У вас заканчиваются средства на балансе для оплаты клиентов.\n" +
+                            "🔄 Пополните баланс в личном кабинете.\n" +
+                            "🕒 Если не совершите платеж в течение 3 дней, клиенты будут удалены.");
+        } catch (Exception e) {
+            logger.error("Ошибка отправки уведомления о низком балансе для {}: {}", chatId, e.getMessage());
+        }
     }
 
     @Async
     public void sendClientsRemovedNotification(Long chatId) {
-        telegramMessageSender.sendNotification(chatId,
-                "❌ Ваши клиенты были удалены из кабинета из-за отсутствия средств на оплату.");
+        try {
+            telegramMessageSender.sendNotification(chatId,
+                    "❌ Ваши клиенты были удалены из кабинета из-за отсутствия средств на оплату.");
+        } catch (Exception e) {
+            logger.error("Ошибка отправки уведомления об удалении клиентов для {}: {}", chatId, e.getMessage());
+        }
     }
 }
-
-
 

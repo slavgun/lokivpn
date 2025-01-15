@@ -22,7 +22,4 @@ public class User {
 
     @Column(name = "balance", nullable = false)
     private int balance; // Баланс пользователя в рублях
-
-    @Column(name = "clients_count", nullable = false)
-    private int clientsCount; // Количество привязанных VPN клиентов
 }

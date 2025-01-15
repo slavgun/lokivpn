@@ -95,7 +95,6 @@ public class TelegramBotService {
                         newUser.setChatId(chatIdLong);
                         newUser.setUsername(telegramUser.getUserName() != null ? telegramUser.getUserName() : "unknown");
                         newUser.setBalance(0); // Изначально баланс равен 0
-                        newUser.setClientsCount(0); // Изначально клиентов нет
 
                         userRepository.save(newUser);
                         logger.info("Новый пользователь добавлен: {}", newUser);
@@ -202,6 +201,19 @@ public class TelegramBotService {
                 "Подтвердите операцию ответом - подтвердить, если нажали случайно, нажмите - отмена", markup);
     }
 
+    // Кнопки подтверждения
+    private InlineKeyboardMarkup createConfirmationButtons(Long vpnClientId) {
+        InlineKeyboardButton confirmButton = new InlineKeyboardButton("✅ Подтвердить");
+        confirmButton.setCallbackData("confirm_vpn_" + vpnClientId);
+
+        InlineKeyboardButton cancelButton = new InlineKeyboardButton("❌ Отмена");
+        cancelButton.setCallbackData("cancel_vpn");
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        markup.setKeyboard(List.of(List.of(confirmButton, cancelButton)));
+        return markup;
+    }
+
     // Подтверждение и получение клиента
     private void confirmVpnBinding(String chatId) {
         Long chatIdLong = Long.parseLong(chatId);
@@ -219,10 +231,6 @@ public class TelegramBotService {
         vpnClient.setUserId(chatIdLong);
         vpnClientRepository.save(vpnClient);
 
-        // Увеличиваем счетчик клиентов у пользователя
-        user.setClientsCount(user.getClientsCount() + 1);
-        userRepository.save(user);
-
         // Отправляем уведомление
         InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
         InlineKeyboardButton clientButton = new InlineKeyboardButton("\uD83D\uDD12 Мои VPN конфиги");
@@ -234,24 +242,10 @@ public class TelegramBotService {
                         vpnClient.getClientName()), markup);
     }
 
-    // тмена операции
+    // Отмена операции
     private void cancelVpnRequest(String chatId) {
         messageSender.sendMessage(chatId, "Операция отменена.");
     }
-
-    // Кнопки подтверждения
-    private InlineKeyboardMarkup createConfirmationButtons(Long vpnClientId) {
-        InlineKeyboardButton confirmButton = new InlineKeyboardButton("✅ Подтвердить");
-        confirmButton.setCallbackData("confirm_vpn_" + vpnClientId);
-
-        InlineKeyboardButton cancelButton = new InlineKeyboardButton("❌ Отмена");
-        cancelButton.setCallbackData("cancel_vpn");
-
-        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-        markup.setKeyboard(List.of(List.of(confirmButton, cancelButton)));
-        return markup;
-    }
-
 
     // Кнопки пополнения баланса
     private InlineKeyboardMarkup createPaymentButtons() {
@@ -434,9 +428,6 @@ public class TelegramBotService {
         client.setUserId(null);
         vpnClientRepository.save(client);
 
-        // Уменьшаем счетчик клиентов
-        userRepository.decrementClientCount(Long.parseLong(chatId));
-
         // Сообщаем об успехе
         sendMessage(chatId, String.format("✅ Клиент '%s' успешно отвязан.", client.getClientName()));
     }
@@ -460,13 +451,6 @@ public class TelegramBotService {
     // Получение списка клиентов у пользователя число
     public List<VpnClient> getClientsForUser(Long userId) {
         return vpnClientRepository.findByUserId(userId);
-    }
-
-    public void updateUserBalance(Long userId, int newBalance) {
-        userRepository.updateBalanceByUserId(userId, newBalance);
-        // Принудительный сброс контекста для актуализации данных
-        entityManager.flush();
-        entityManager.clear();
     }
 
 //Скачивание QR кода и конфига

@@ -23,14 +23,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Transactional
     @Query("UPDATE User u SET u.balance = :balance WHERE u.id = :userId")
     void updateBalanceByUserId(Long userId, int balance);
-
-    @Modifying
-    @Transactional
-    @Query("UPDATE User u SET u.clientsCount = u.clientsCount - 1 WHERE u.id = :userId")
-    void decrementClientCount(Long userId);
-
-    @Query("SELECT u FROM User u WHERE u.clientsCount > 0")
-    Page<User> findUsersWithActiveClients(Pageable pageable);
-
 }
 
