@@ -10,11 +10,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import java.io.File;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -32,15 +35,21 @@ public class TelegramBotService {
     private final PaymentService paymentService;
     private final VpnClientRepository vpnClientRepository;
     private final UserRepository userRepository;
+    private final InstructionService instructionService;
+    private final SupportService supportService;
 
     public TelegramBotService(TelegramMessageSender messageSender,
                               PaymentService paymentService,
                               VpnClientRepository vpnClientRepository,
-                              UserRepository userRepository) {
+                              UserRepository userRepository,
+                              InstructionService instructionService,
+                              SupportService supportService) {
         this.messageSender = messageSender;
         this.paymentService = paymentService;
         this.vpnClientRepository = vpnClientRepository;
         this.userRepository = userRepository;
+        this.instructionService = instructionService;
+        this.supportService = supportService;
     }
 
     public void processUpdate(Update update) {
@@ -122,6 +131,22 @@ public class TelegramBotService {
                 break;
             case "pay":
                 sendPaymentRequestMessage(chatId);
+                break;
+            case "instruction":
+                instructionService.sendDeviceInstructionMenu(chatId);
+                break;
+            case "support":
+                supportService.sendSupportInfo(chatId);
+                break;
+            case "main_menu":
+                sendWelcomeMessage(chatId);
+                break;
+            case "instruction_ios":
+            case "instruction_android":
+            case "instruction_windows":
+                // Убираем префикс "instruction_" перед передачей в метод
+                String deviceType = data.replace("instruction_", "");
+                instructionService.sendDeviceInstruction(chatId, deviceType);
                 break;
             default:
                 if (data.startsWith("client_")) {
@@ -257,6 +282,7 @@ public class TelegramBotService {
 //Приветственное сообщение
 
     private void sendWelcomeMessage(String chatId) {
+        // Создаем кнопки
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
 
         InlineKeyboardButton accountButton = new InlineKeyboardButton();
@@ -267,16 +293,44 @@ public class TelegramBotService {
         vpnButton.setText("\uD83D\uDD11 Получить VPN");
         vpnButton.setCallbackData("get_vpn");
 
+        InlineKeyboardButton instructionButton = new InlineKeyboardButton();
+        instructionButton.setText("📘 Инструкция");
+        instructionButton.setCallbackData("instruction");
+
+        InlineKeyboardButton supportButton = new InlineKeyboardButton();
+        supportButton.setText("🛠 Поддержка");
+        supportButton.setCallbackData("support");
+
         inlineKeyboardMarkup.setKeyboard(List.of(
-                List.of(accountButton, vpnButton)
+                List.of(accountButton, vpnButton),
+                List.of(instructionButton),
+                List.of(supportButton)
         ));
 
-        SendMessage sendMessage = new SendMessage();
-        sendMessage.setChatId(chatId);
-        sendMessage.setText("Добро пожаловать в LOKIVPN! Выберите действие ниже.");
-        sendMessage.setReplyMarkup(inlineKeyboardMarkup);
+        // Путь к фото в ресурсах
+        String photoPath = "images/loki.JPG"; // Путь внутри папки resources
 
-        messageSender.sendMessage(sendMessage);
+        try (InputStream inputStream = getClass().getClassLoader().getResourceAsStream(photoPath)) {
+            if (inputStream == null) {
+                throw new NullPointerException("Фото не найдено в ресурсах: " + photoPath);
+            }
+
+            SendPhoto sendPhoto = new SendPhoto();
+            sendPhoto.setChatId(chatId);
+            sendPhoto.setPhoto(new InputFile(inputStream, "loki.JPG"));
+            sendPhoto.setCaption("Добро пожаловать в LOKIVPN! Выберите действие ниже.");
+            sendPhoto.setReplyMarkup(inlineKeyboardMarkup);
+
+            messageSender.sendPhoto(sendPhoto);
+        } catch (Exception e) {
+            // Логирование и fallback
+            logger.error("Не удалось загрузить изображение: {}", e.getMessage());
+            SendMessage fallbackMessage = new SendMessage();
+            fallbackMessage.setChatId(chatId);
+            fallbackMessage.setText("Добро пожаловать в LOKIVPN! Выберите действие ниже.");
+            fallbackMessage.setReplyMarkup(inlineKeyboardMarkup);
+            messageSender.sendMessage(fallbackMessage);
+        }
     }
 
 //Личный кабинет

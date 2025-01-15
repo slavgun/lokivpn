@@ -9,6 +9,7 @@ import org.telegram.telegrambots.meta.api.methods.AnswerPreCheckoutQuery;
 import org.telegram.telegrambots.meta.api.methods.invoices.SendInvoice;
 import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.bots.AbsSender;
@@ -77,6 +78,16 @@ public class TelegramMessageSender {
             logger.error("Ошибка отправки сообщения: {}", e.getMessage(), e);
         }
     }
+
+    // Отправка сообщения с фото
+    public void sendPhoto(SendPhoto sendPhoto) {
+        try {
+            bot.execute(sendPhoto); // Отправляет фото через Telegram API
+        } catch (TelegramApiException e) {
+            logger.error("Ошибка при отправке фото: {}", e.getMessage(), e);
+        }
+    }
+
 
     // Отправка уведомления
     public void sendNotification(Long userId, String message) {
