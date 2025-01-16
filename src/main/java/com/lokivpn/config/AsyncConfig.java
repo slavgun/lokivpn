@@ -14,9 +14,9 @@ public class AsyncConfig implements AsyncConfigurer {
     @Override
     public Executor getAsyncExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(5); // Минимальное количество потоков в пуле
-        executor.setMaxPoolSize(10); // Максимальное количество потоков в пуле
-        executor.setQueueCapacity(25); // Размер очереди для задач, ожидающих выполнения
+        executor.setCorePoolSize(10); // Минимальное количество потоков в пуле
+        executor.setMaxPoolSize(20); // Максимальное количество потоков в пуле
+        executor.setQueueCapacity(500); // Размер очереди для задач, ожидающих выполнения
         executor.setThreadNamePrefix("AsyncExecutor-"); // Префикс для имени потоков
         executor.initialize();
         return executor;
