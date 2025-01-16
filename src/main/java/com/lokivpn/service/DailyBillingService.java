@@ -136,20 +136,13 @@ public class DailyBillingService {
     }
 
     private void regenerateWireGuardConfig(String configPath, String qrCodePath, String clientName, String serverIp) throws Exception {
-        logger.info("Начинается процесс регенерации для клиента {} на сервере {}", clientName, serverIp);
+        System.out.println("Начинается процесс регенерации для клиента " + clientName + " на сервере " + serverIp);
 
         String clientPrivateKey = executeCommand(serverIp, "wg genkey");
-        logger.info("Сгенерирован приватный ключ для клиента {}.", clientName);
+        System.out.println("Сгенерирован приватный ключ для клиента " + clientName);
 
         String clientPublicKey = executeCommand(serverIp, "echo " + clientPrivateKey + " | wg pubkey");
-        logger.info("Сгенерирован публичный ключ для клиента {}: {}", clientName, clientPublicKey);
-
-        // Создаем каталог, если он отсутствует
-        java.nio.file.Path configDirectory = java.nio.file.Paths.get("/etc/wireguard/configs");
-        if (!java.nio.file.Files.exists(configDirectory)) {
-            java.nio.file.Files.createDirectories(configDirectory);
-            logger.info("Создан каталог: {}", configDirectory);
-        }
+        System.out.println("Сгенерирован публичный ключ для клиента " + clientName + ": " + clientPublicKey);
 
         String newConfigContent = String.format(
                 """
@@ -157,7 +150,7 @@ public class DailyBillingService {
                 PrivateKey = %s
                 Address = 10.7.0.%d/32
                 DNS = 8.8.8.8
-
+    
                 [Peer]
                 PublicKey = %s
                 Endpoint = %s:51820
@@ -167,9 +160,11 @@ public class DailyBillingService {
                 clientPrivateKey, getClientIpSuffix(clientName), getServerPublicKey(serverIp), serverIp
         );
 
-        Files.writeString(Paths.get(configPath), newConfigContent);
-        logger.info("Новая конфигурация записана в файл {} для клиента {}.", configPath, clientName);
+        // Пишем конфигурацию на сервер
+        writeConfigToRemoteServer(serverIp, configPath, newConfigContent);
+        System.out.println("Конфигурация успешно записана для клиента " + clientName);
     }
+
 
     private String executeCommand(String host, String command) throws Exception {
         JSch jsch = new JSch();
@@ -195,6 +190,19 @@ public class DailyBillingService {
         session.disconnect();
 
         return output.toString().trim();
+    }
+
+    private void writeConfigToRemoteServer(String host, String remoteFilePath, String content) throws Exception {
+        // Экранируем содержимое, чтобы избежать проблем с кавычками
+        String escapedContent = content.replace("\"", "\\\"").replace("$", "\\$");
+
+        // Формируем команду для записи содержимого в файл
+        String command = String.format("echo \"%s\" > %s", escapedContent, remoteFilePath);
+
+        // Выполняем команду на удаленном сервере
+        String result = executeCommand(host, command);
+
+        System.out.println("Результат записи на удаленный сервер: " + result);
     }
 
 
