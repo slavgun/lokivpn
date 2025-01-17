@@ -12,11 +12,14 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.bots.AbsSender;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.List;
 
 
 @Service
@@ -27,6 +30,69 @@ public class TelegramMessageSender {
 
     public TelegramMessageSender(@Lazy AbsSender bot) {
         this.bot = bot;
+    }
+
+// Кастомка
+
+    public void sendCustomNotification(Long chatId, String message, String photoUrl, List<String> buttonTexts, List<String> buttonUrls) {
+        if (photoUrl != null && !photoUrl.isEmpty()) {
+            sendPhotoNotification(chatId, message, photoUrl, buttonTexts, buttonUrls);
+        } else {
+            sendTextNotification(chatId, message, buttonTexts, buttonUrls);
+        }
+    }
+
+    private void sendTextNotification(Long chatId, String message, List<String> buttonTexts, List<String> buttonUrls) {
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(chatId.toString());
+        sendMessage.setText(message);
+
+        if (buttonTexts != null && buttonUrls != null && !buttonTexts.isEmpty() && !buttonUrls.isEmpty()) {
+            InlineKeyboardMarkup markup = createInlineKeyboard(buttonTexts, buttonUrls);
+            sendMessage.setReplyMarkup(markup);
+        }
+
+        try {
+            bot.execute(sendMessage);
+        } catch (TelegramApiException e) {
+            logger.error("Failed to send text message to chatId {}: {}", chatId, e.getMessage());
+        }
+    }
+
+    private void sendPhotoNotification(Long chatId, String message, String photoUrl, List<String> buttonTexts, List<String> buttonUrls) {
+        SendPhoto sendPhoto = new SendPhoto();
+        sendPhoto.setChatId(chatId.toString());
+        sendPhoto.setPhoto(new InputFile(photoUrl));
+        sendPhoto.setCaption(message);
+
+        if (buttonTexts != null && buttonUrls != null && !buttonTexts.isEmpty() && !buttonUrls.isEmpty()) {
+            InlineKeyboardMarkup markup = createInlineKeyboard(buttonTexts, buttonUrls);
+            sendPhoto.setReplyMarkup(markup);
+        }
+
+        try {
+            bot.execute(sendPhoto);
+        } catch (TelegramApiException e) {
+            logger.error("Failed to send photo message to chatId {}: {}", chatId, e.getMessage());
+        }
+    }
+
+    private InlineKeyboardMarkup createInlineKeyboard(List<String> buttonTexts, List<String> buttonUrls) {
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        for (int i = 0; i < buttonTexts.size() && i < buttonUrls.size(); i++) {
+            InlineKeyboardButton button = new InlineKeyboardButton();
+            button.setText(buttonTexts.get(i));
+            button.setUrl(buttonUrls.get(i));
+
+            List<InlineKeyboardButton> row = new ArrayList<>();
+            row.add(button);
+            rows.add(row);
+        }
+
+        markup.setKeyboard(rows);
+        return markup;
     }
 
 // Методы для отправки сообщений
