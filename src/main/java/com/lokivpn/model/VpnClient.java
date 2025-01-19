@@ -31,4 +31,8 @@ public class VpnClient {
 
     @Column(name = "user_id")
     private Long userId;
+
+    @Transient
+    private String publicKey;
+
 }

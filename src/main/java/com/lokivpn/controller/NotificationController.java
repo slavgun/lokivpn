@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @RestController
@@ -88,13 +89,21 @@ public class NotificationController {
     @PostMapping("/send")
     public ResponseEntity<String> sendCustomNotification(@RequestBody NotificationRequest request) {
         try {
+            // Заполнение значений по умолчанию, если они не переданы
+            String message = request.getMessage() != null ? request.getMessage() : "Default message";
+            String photoUrl = request.getPhotoUrl();
+            List<String> buttonTexts = request.getButtonTexts() != null ? request.getButtonTexts() : new ArrayList<>();
+            List<String> buttonUrls = request.getButtonUrls() != null ? request.getButtonUrls() : new ArrayList<>();
+
+            // Вызов сервиса для отправки уведомления
             messageSender.sendCustomNotification(
                     request.getChatId(),
-                    request.getMessage(),
-                    request.getPhotoUrl(),
-                    request.getButtonTexts(),
-                    request.getButtonUrls()
+                    message,
+                    photoUrl,
+                    buttonTexts,
+                    buttonUrls
             );
+
             return ResponseEntity.ok("Notification sent successfully.");
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Failed to send notification: " + e.getMessage());

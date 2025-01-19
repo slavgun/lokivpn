@@ -1,42 +1,41 @@
 package com.lokivpn.service;
 
-import com.jcraft.jsch.ChannelExec;
-import com.jcraft.jsch.JSch;
-import com.jcraft.jsch.Session;
 import com.lokivpn.model.User;
 import com.lokivpn.model.VpnClient;
 import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 public class DailyBillingService {
 
     private static final Logger logger = LoggerFactory.getLogger(DailyBillingService.class);
+    private static final int REQUEST_DELAY_SECONDS = 5; // Задержка между запросами
 
     private final UserRepository userRepository;
     private final VpnClientRepository vpnClientRepository;
     private final TelegramMessageSender telegramMessageSender;
 
-    private final ConcurrentHashMap<String, String> serverPublicKeyCache = new ConcurrentHashMap<>();
     private final ExecutorService executorService = Executors.newFixedThreadPool(10);
+
+    @Autowired
+    private RestTemplate restTemplate;
 
     public DailyBillingService(UserRepository userRepository,
                                VpnClientRepository vpnClientRepository,
@@ -45,12 +44,6 @@ public class DailyBillingService {
         this.vpnClientRepository = vpnClientRepository;
         this.telegramMessageSender = telegramMessageSender;
     }
-
-    @Value("${ssh.username}")
-    private String sshUsername;
-
-    @Value("${ssh.password}")
-    private String sshPassword;
 
     @Scheduled(cron = "0 0 0 * * ?")
     public void processDailyBalances() {
@@ -86,7 +79,7 @@ public class DailyBillingService {
         int clientsCount = vpnClientRepository.countByUserId(chatId);
         int dailyCharge = clientsCount * 5;
 
-        logger.info("Обработка пользователя {}: баланс={}, клиенты={}, списание= {}",
+        logger.info("Обработка пользователя {}: баланс={}, клиенты={}, списание={}",
                 chatId, user.getBalance(), clientsCount, dailyCharge);
 
         if (clientsCount == 0) {
@@ -121,153 +114,82 @@ public class DailyBillingService {
         vpnClientRepository.unassignClientsByUserId(chatId);
         logger.warn("Клиенты пользователя {} были отвязаны из-за недостатка средств.", chatId);
 
-        regenerateVpnConfigs(clients);
+        // Удаляем только клиентов по одному, без перегенерации
+        processClientsIndividually(clients);
 
         sendClientsRemovedNotification(chatId);
     }
 
-    @Async
-    public void regenerateVpnConfigs(List<VpnClient> clients) {
-        logger.info("Начинается перегенерация конфигураций для {} клиентов", clients.size());
+    public void processClientsIndividually(List<VpnClient> clients) {
+        logger.info("Начало обработки клиентов");
 
-        // Счетчик задач
-        CountDownLatch latch = new CountDownLatch(clients.size());
+        // Группируем клиентов по серверам
+        Map<String, List<VpnClient>> clientsByServer = clients.stream()
+                .collect(Collectors.groupingBy(VpnClient::getServer));
 
-        for (VpnClient client : clients) {
-            executorService.submit(() -> {
-                try {
-                    regenerateWireGuardConfig(client.getConfigFile(), client.getClientName(), client.getServer());
-                    logger.info("Конфигурация для клиента {} успешно перегенерирована.", client.getClientName());
-                } catch (Exception e) {
-                    logger.error("Ошибка при перегенерации конфигурации для клиента {}: {}", client.getClientName(), e.getMessage(), e);
-                } finally {
-                    // Уменьшаем счетчик при завершении задачи
-                    latch.countDown();
+        clientsByServer.forEach((server, serverClients) -> {
+            try {
+                String serverApiUrl = String.format("http://%s:8080/api/wireguard", server);
+
+                // Удаление и перегенерация каждого клиента
+                for (VpnClient client : serverClients) {
+                    logger.info("Удаление клиента {} на сервере {}", client.getClientName(), server);
+                    removeClient(serverApiUrl, client.getClientName());
+                    addDelay(); // Задержка между запросами
+
+                    logger.info("Перегенерация клиента {} на сервере {}", client.getClientName(), server);
+                    regenerateClient(serverApiUrl, client.getClientName());
+                    addDelay(); // Задержка между запросами
                 }
-            });
-        }
 
+                // Перезагрузка сервера после обработки всех клиентов
+                logger.info("Перезапуск WireGuard на сервере {}", server);
+                restartWireGuard(serverApiUrl);
+            } catch (Exception e) {
+                logger.error("Ошибка при обработке клиентов на сервере {}: {}", server, e.getMessage(), e);
+            }
+        });
+    }
 
+    private void removeClient(String serverApiUrl, String clientName) {
         try {
-            // Ожидаем завершения всех задач
-            latch.await();
-
-            // Обновляем конфигурацию wg0.conf после всех изменений
-            String serverIp = clients.get(0).getServer(); // Предполагаем, что все клиенты на одном сервере
-            updateWireGuardConfig(serverIp, clients);
-            logger.info("Обновление конфигурации wg0.conf завершено.");
-        } catch (InterruptedException e) {
-            logger.error("Ошибка при ожидании завершения задач: {}", e.getMessage(), e);
+            String removeUrl = String.format("%s/remove-peer?clientName=%s", serverApiUrl, clientName);
+            restTemplate.delete(removeUrl);
+            logger.info("Клиент {} успешно удален через API сервера {}", clientName, serverApiUrl);
         } catch (Exception e) {
-            logger.error("Ошибка обновления wg0.conf: {}", e.getMessage(), e);
+            logger.error("Ошибка удаления клиента {} через API сервера {}: {}", clientName, serverApiUrl, e.getMessage(), e);
+        }
+    }
+
+    private void regenerateClient(String serverApiUrl, String clientName) {
+        try {
+            String regenerateUrl = String.format("%s/regenerate-client?clientName=%s", serverApiUrl, clientName);
+            restTemplate.postForEntity(regenerateUrl, null, String.class);
+            logger.info("Клиент {} успешно перегенерирован через API сервера {}", clientName, serverApiUrl);
+        } catch (Exception e) {
+            logger.error("Ошибка перегенерации клиента {} через API сервера {}: {}", clientName, serverApiUrl, e.getMessage(), e);
         }
     }
 
 
-    // Удаление неиспользуемого параметра из метода regenerateWireGuardConfig
-    private void regenerateWireGuardConfig(String configPath, String clientName, String serverIp) throws Exception {
-        logger.info("Начинается процесс регенерации для клиента {} на сервере {}", clientName, serverIp);
-
-        String clientPrivateKey = executeCommand(serverIp, "wg genkey");
-        String clientPublicKey = executeCommand(serverIp, "echo " + clientPrivateKey + " | wg pubkey");
-
-        String newConfigContent = String.format(
-                """
-                [Interface]
-                PrivateKey = %s
-                Address = 10.7.0.%d/32
-                DNS = 8.8.8.8
-        
-                [Peer]
-                PublicKey = %s
-                Endpoint = %s:51820
-                AllowedIPs = 0.0.0.0/0
-                PersistentKeepalive = 25
-                """,
-                clientPrivateKey, getClientIpSuffix(clientName), clientPublicKey, serverIp
-        );
-
-        writeConfigToRemoteServer(serverIp, configPath, newConfigContent);
-        logger.info("Конфигурация успешно записана для клиента {}", clientName);
-    }
-
-    // Удаление дублирующегося кода в updateWireGuardConfig
-    private void updateWireGuardConfig(String serverIp, List<VpnClient> clients) throws Exception {
-        StringBuilder peerConfigs = new StringBuilder();
-
-        for (VpnClient client : clients) {
-            String publicKey = executeCommand(serverIp, "cat " + client.getConfigFile() + " | wg pubkey");
-            peerConfigs.append(generatePeerConfig(publicKey, getClientIpSuffix(client.getClientName())));
+    private void restartWireGuard(String serverApiUrl) {
+        try {
+            String restartUrl = String.format("%s/restart", serverApiUrl);
+            restTemplate.postForEntity(restartUrl, null, String.class);
+            logger.info("WireGuard успешно перезапущен через API сервера {}", serverApiUrl);
+        } catch (Exception e) {
+            logger.error("Ошибка перезагрузки WireGuard через API сервера {}: {}", serverApiUrl, e.getMessage(), e);
         }
-
-        writeConfigToRemoteServer(serverIp, "/etc/wireguard/wg0.conf", peerConfigs.toString());
-        executeCommand(serverIp, "wg-quick down wg0 && wg-quick up wg0");
-        logger.info("WireGuard успешно перезапущен на сервере {}", serverIp);
     }
 
-    private String generatePeerConfig(String publicKey, int ipSuffix) {
-        return String.format(
-                """
-                [Peer]
-                PublicKey = %s
-                AllowedIPs = 10.7.0.%d/32
-                """,
-                publicKey.trim(), ipSuffix
-        );
-    }
 
-    private String executeCommand(String host, String command) throws Exception {
-        JSch jsch = new JSch();
-        Session session = jsch.getSession(sshUsername, host, 22);
-        session.setPassword(sshPassword); // Используем пароль из properties
-        session.setConfig("StrictHostKeyChecking", "no");
-        session.connect();
-
-        ChannelExec channel = (ChannelExec) session.openChannel("exec");
-        channel.setCommand(command);
-        channel.setErrStream(System.err);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(channel.getInputStream(), StandardCharsets.UTF_8));
-
-        channel.connect();
-
-        StringBuilder output = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            output.append(line).append("\n");
+    private void addDelay() {
+        try {
+            TimeUnit.SECONDS.sleep(REQUEST_DELAY_SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Ошибка задержки между запросами: {}", e.getMessage(), e);
         }
-
-        channel.disconnect();
-        session.disconnect();
-
-        return output.toString().trim();
-    }
-
-    private void writeConfigToRemoteServer(String host, String remoteFilePath, String content) throws Exception {
-        // Экранируем содержимое, чтобы избежать проблем с кавычками
-        String escapedContent = content.replace("\"", "\\\"").replace("$", "\\$");
-
-        // Формируем команду для записи содержимого в файл
-        String command = String.format("echo \"%s\" > %s", escapedContent, remoteFilePath);
-
-        // Выполняем команду на удаленном сервере
-        String result = executeCommand(host, command);
-
-        System.out.println("Результат записи на удаленный сервер: " + result);
-    }
-
-
-    private int getClientIpSuffix(String clientName) {
-        return Integer.parseInt(clientName.split("_")[1]) + 1;
-    }
-
-    private String getServerPublicKey(String serverIp) throws Exception {
-        if (serverPublicKeyCache.containsKey(serverIp)) {
-            return serverPublicKeyCache.get(serverIp);
-        }
-
-        String publicKey = executeCommand(serverIp, "wg show wg0 public-key");
-        serverPublicKeyCache.put(serverIp, publicKey);
-        return publicKey;
     }
 
     @Async
@@ -280,3 +202,4 @@ public class DailyBillingService {
         telegramMessageSender.sendNotification(chatId, "❌ Ваши клиенты были удалены.");
     }
 }
+

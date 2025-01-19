@@ -3,7 +3,6 @@ package com.lokivpn.controller;
 import com.lokivpn.service.DailyBillingService;
 import com.lokivpn.service.TelegramBotService;
 import com.lokivpn.service.TelegramMessageSender;
-import com.lokivpn.config.SSHCommandExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -42,27 +41,19 @@ public class WebhookController {
                 if ("/process-billing".equals(messageText)) {
                     // Вызов биллинга
                     telegramMessageSender.sendMessage(chatId, "Запущен процесс биллинга...");
-                    dailyBillingService.processDailyBalances();
-                    telegramMessageSender.sendMessage(chatId, "Биллинг успешно завершен.");
+                    try {
+                        dailyBillingService.processDailyBalances();
+                        telegramMessageSender.sendMessage(chatId, "Биллинг успешно завершен.");
+                    } catch (Exception e) {
+                        telegramMessageSender.sendMessage(chatId, "Ошибка при выполнении биллинга: " + e.getMessage());
+                        logger.error("Error during billing: {}", e.getMessage(), e);
+                    }
                     return;
                 }
 
-                if ("/test-wg-genkey".equals(messageText)) {
-                    // Выполнение команды wg genkey
-                    telegramMessageSender.sendMessage(chatId, "Выполняется команда `wg genkey`...");
-                    String result = SSHCommandExecutor.executeCommand(
-                            "46.29.234.231",
-                            "root",
-                            "Ckfduey3103", // Замените на реальный пароль
-                            "wg genkey"
-                    );
-                    telegramMessageSender.sendMessage(chatId, "Результат команды `wg genkey`: " + result);
-                    return;
-                }
+                // Обработка других сообщений
+                telegramBotService.processUpdate(update);
             }
-
-            // Обработка других сообщений
-            telegramBotService.processUpdate(update);
         } catch (Exception e) {
             logger.error("Error processing update: {}", e.getMessage(), e);
         }
