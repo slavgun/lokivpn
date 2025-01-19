@@ -19,5 +19,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Transactional
     @Query("UPDATE User u SET u.balance = :balance WHERE u.id = :userId")
     void updateBalanceByUserId(Long userId, int balance);
+
+    User findByReferralCode(String referralCode);
+
 }
 

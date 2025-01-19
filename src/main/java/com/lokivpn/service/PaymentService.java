@@ -135,6 +135,32 @@ public class PaymentService {
         }
     }
 
+    protected void processReferral(User newUser, String referralCode, String chatId) {
+        User referrer = userRepository.findByReferralCode(referralCode);
+        if (referrer != null) {
+            // Связываем нового пользователя с реферером
+            newUser.setReferredBy(referralCode);
+
+            // Размер бонуса
+            int bonus = 75;
+
+            // Начисляем бонусы рефереру
+            referrer.setReferralBonus(referrer.getReferralBonus() + bonus);
+            referrer.setBalance(referrer.getBalance() + bonus); // Добавляем на баланс
+            referrer.setReferredUsersCount(referrer.getReferredUsersCount() + 1);
+            userRepository.save(referrer);
+
+            // Начисляем бонус новому пользователю
+            newUser.setReferralBonus(bonus);
+            newUser.setBalance(newUser.getBalance() + bonus); // Добавляем на баланс
+
+            // Отправляем уведомления
+            messageSender.sendMessage(referrer.getChatId().toString(), "🎉 Вы получили 75₽ за приглашение нового пользователя! Бонус добавлен на ваш баланс.");
+            messageSender.sendMessage(chatId, "🎉 Вам начислено 75₽ за регистрацию по реферальной ссылке! Бонус добавлен на ваш баланс.");
+        }
+    }
+
+
     public int getUserBalance(Long userId) {
         return userRepository.findById(userId)
                 .map(User::getBalance)

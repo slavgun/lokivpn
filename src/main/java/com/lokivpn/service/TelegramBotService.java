@@ -18,10 +18,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import java.io.File;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 public class TelegramBotService {
@@ -55,13 +52,11 @@ public class TelegramBotService {
     public void processUpdate(Update update) {
         logger.info("Processing update: {}", update);
 
-        // Обработка PreCheckoutQuery
         if (update.hasPreCheckoutQuery()) {
             paymentService.handlePreCheckoutQuery(update);
             return;
         }
 
-        // Обработка SuccessfulPayment
         if (update.hasMessage() && update.getMessage().hasSuccessfulPayment()) {
             paymentService.handleSuccessfulPayment(update);
             return;
@@ -77,36 +72,40 @@ public class TelegramBotService {
             String text = update.getMessage().getText();
             logger.info("Received message from chat {}: {}", chatId, text);
 
-            switch (text) {
-                case "/start":
-                    org.telegram.telegrambots.meta.api.objects.User telegramUser = update.getMessage().getFrom(); // Telegram User
-                    if (telegramUser == null) {
-                        logger.error("Не удалось получить информацию о пользователе из сообщения.");
-                        messageSender.sendMessage(chatId, "Ошибка: не удалось получить информацию о вашем аккаунте. Попробуйте позже.");
-                        return;
+            if (text.startsWith("/start")) {
+                // Извлечение реферального кода, если он есть
+                String[] parts = text.split(" ");
+                String referralCode = parts.length > 1 ? parts[1] : null;
+
+                org.telegram.telegrambots.meta.api.objects.User telegramUser = update.getMessage().getFrom();
+                if (telegramUser == null) {
+                    logger.error("Не удалось получить информацию о пользователе из сообщения.");
+                    messageSender.sendMessage(chatId, "Ошибка: не удалось получить информацию о вашем аккаунте. Попробуйте позже.");
+                    return;
+                }
+
+                Long chatIdLong = Long.parseLong(chatId);
+                Optional<User> existingUser = userRepository.findByChatId(chatIdLong);
+                if (existingUser.isEmpty()) {
+                    // Новый пользователь
+                    User newUser = new User();
+                    newUser.setChatId(chatIdLong);
+                    newUser.setUsername(telegramUser.getUserName() != null ? telegramUser.getUserName() : "unknown");
+                    newUser.setBalance(0);
+
+                    // Обрабатываем реферальный код, если он есть
+                    if (referralCode != null) {
+                        paymentService.processReferral(newUser, referralCode, chatId);
                     }
 
-                    // Проверяем, существует ли пользователь в таблице users
-                    Long chatIdLong = Long.parseLong(chatId);
-                    Optional<User> existingUser = userRepository.findByChatId(chatIdLong);
-                    if (existingUser.isEmpty()) {
-                        // Добавляем нового пользователя в таблицу users
-                        User newUser = new User();
-                        newUser.setChatId(chatIdLong);
-                        newUser.setUsername(telegramUser.getUserName() != null ? telegramUser.getUserName() : "unknown");
-                        newUser.setBalance(0); // Изначально баланс равен 0
-
-                        userRepository.save(newUser);
-                        logger.info("Новый пользователь добавлен: {}", newUser);
-                    } else {
-                        logger.info("Пользователь с chatId {} уже существует.", chatId);
-                    }
-
-                    sendWelcomeMessage(chatId);
-                    break;
-                default:
-                    sendUnknownCommand(chatId);
-                    break;
+                    userRepository.save(newUser);
+                    logger.info("Новый пользователь добавлен: {}", newUser);
+                } else {
+                    logger.info("Пользователь с chatId {} уже существует.", chatId);
+                }
+                sendWelcomeMessage(chatId);
+            } else {
+                sendUnknownCommand(chatId);
             }
         }
     }
@@ -139,6 +138,16 @@ public class TelegramBotService {
                 break;
             case "main_menu":
                 sendWelcomeMessage(chatId);
+                break;
+            case "referral":
+                Optional<User> userOptional = userRepository.findByChatId(Long.parseLong(chatId));
+                if (userOptional.isPresent()) {
+                    User user = userOptional.get();
+                    String stats = getReferralStats(user.getId());
+                    messageSender.sendMessage(chatId, stats);
+                } else {
+                    messageSender.sendMessage(chatId, "Пользователь не найден. Пожалуйста, используйте /start для регистрации.");
+                }
                 break;
             case "instruction_ios":
             case "instruction_android":
@@ -295,9 +304,13 @@ public class TelegramBotService {
         supportButton.setText("🛠 Поддержка");
         supportButton.setCallbackData("support");
 
+        InlineKeyboardButton referralButton = new InlineKeyboardButton();
+        referralButton.setText("👥 Реферальная система");
+        referralButton.setCallbackData("referral");
+
         inlineKeyboardMarkup.setKeyboard(List.of(
                 List.of(accountButton, vpnButton),
-                List.of(instructionButton),
+                List.of(instructionButton, referralButton),
                 List.of(supportButton)
         ));
 
@@ -451,6 +464,27 @@ public class TelegramBotService {
     // Получение списка клиентов у пользователя число
     public List<VpnClient> getClientsForUser(Long userId) {
         return vpnClientRepository.findByUserId(userId);
+    }
+
+    // Реферальная система
+
+    public String generateReferralLink(Long userId) {
+        User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (user.getReferralCode() == null) {
+            user.setReferralCode(UUID.randomUUID().toString());
+            userRepository.save(user);
+        }
+
+        return "https://t.me/LokiVpnBot?start=" + user.getReferralCode();
+    }
+
+    public String getReferralStats(Long userId) {
+        User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+
+        return "👥 Приглашённые пользователи: " + user.getReferredUsersCount() + "\n" +
+                "💰 Бонусы за рефералов: " + user.getReferralBonus() + "₽\n" +
+                "🔗 Ваша реферальная ссылка: https://t.me/LokiVpnBot?start=" + user.getReferralCode();
     }
 
 //Скачивание QR кода и конфига

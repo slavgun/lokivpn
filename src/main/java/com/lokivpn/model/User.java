@@ -22,4 +22,16 @@ public class User {
 
     @Column(name = "balance", nullable = false)
     private int balance; // Баланс пользователя в рублях
+
+    @Column(name = "referral_code")
+    private String referralCode;
+
+    @Column(name = "referred_by")
+    private String referredBy;
+
+    @Column(name = "referral_bonus")
+    private double referralBonus;
+
+    @Column(name = "referred_users_count")
+    private int referredUsersCount;
 }
