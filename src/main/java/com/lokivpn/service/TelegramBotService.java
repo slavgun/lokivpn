@@ -86,12 +86,16 @@ public class TelegramBotService {
 
                 Long chatIdLong = Long.parseLong(chatId);
                 Optional<User> existingUser = userRepository.findByChatId(chatIdLong);
+
                 if (existingUser.isEmpty()) {
                     // Новый пользователь
                     User newUser = new User();
                     newUser.setChatId(chatIdLong);
                     newUser.setUsername(telegramUser.getUserName() != null ? telegramUser.getUserName() : "unknown");
                     newUser.setBalance(0);
+
+                    // Генерация реферальной ссылки
+                    String referralLink = generateReferralLink(newUser);
 
                     // Обрабатываем реферальный код, если он есть
                     if (referralCode != null) {
@@ -100,6 +104,8 @@ public class TelegramBotService {
 
                     userRepository.save(newUser);
                     logger.info("Новый пользователь добавлен: {}", newUser);
+
+                    messageSender.sendMessage(chatId, "Добро пожаловать в LOKIVPN! Ваша реферальная ссылка: " + referralLink);
                 } else {
                     logger.info("Пользователь с chatId {} уже существует.", chatId);
                 }
@@ -143,8 +149,7 @@ public class TelegramBotService {
                 Optional<User> userOptional = userRepository.findByChatId(Long.parseLong(chatId));
                 if (userOptional.isPresent()) {
                     User user = userOptional.get();
-                    String stats = getReferralStats(user.getId());
-                    messageSender.sendMessage(chatId, stats);
+                    sendReferralMenu(chatId, user);
                 } else {
                     messageSender.sendMessage(chatId, "Пользователь не найден. Пожалуйста, используйте /start для регистрации.");
                 }
@@ -259,7 +264,7 @@ public class TelegramBotService {
     // Кнопки пополнения баланса
     private InlineKeyboardMarkup createPaymentButtons() {
         List<InlineKeyboardButton> row1 = List.of(
-                createPaymentButton("110₽", "pay_110"), // изменения
+                createPaymentButton("150₽", "pay_150"), // изменения
                 createPaymentButton("300₽", "pay_300"),
                 createPaymentButton("600₽", "pay_600")
         );
@@ -289,7 +294,7 @@ public class TelegramBotService {
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
 
         InlineKeyboardButton accountButton = new InlineKeyboardButton();
-        accountButton.setText("\uD83D\uDC64 Личный кабинет");
+        accountButton.setText("\uD83C\uDFE0 Личный кабинет");
         accountButton.setCallbackData("account");
 
         InlineKeyboardButton vpnButton = new InlineKeyboardButton();
@@ -301,7 +306,7 @@ public class TelegramBotService {
         instructionButton.setCallbackData("instruction");
 
         InlineKeyboardButton supportButton = new InlineKeyboardButton();
-        supportButton.setText("🛠 Поддержка");
+        supportButton.setText("\uD83D\uDCAC Поддержка");
         supportButton.setCallbackData("support");
 
         InlineKeyboardButton referralButton = new InlineKeyboardButton();
@@ -347,14 +352,26 @@ public class TelegramBotService {
         int balance = getUserBalance(Long.parseLong(chatId)); // Преобразуем chatId в Long
         int clientCount = vpnClientRepository.countByUserId(userId);
 
+        // Стоимость использования одного клиента в день
+        int dailyCostPerClient = 5;
+        int totalDailyCost = clientCount * dailyCostPerClient;
+
+        // Расчет количества дней
+        int daysAvailable = totalDailyCost > 0 ? balance / totalDailyCost : 0;
+
+        // Текст для личного кабинета
         String accountInfo = String.format(
                 "\uD83C\uDFE0 *Личный кабинет:*\n" +
                         "🔹 _Кол\\-во конфигов:_ *%d*\n" +
-                        "💳 _Баланс:_ *%d RUB*",
+                        "💳 _Баланс:_ *%d RUB* \\(\\~%d дней\\)\n\n" +
+                        "Тариф *150₽/мес* за 1 устройство\\.\n\n" +
+                        "\uD83D\uDC6D _Пригласите друзей в наш сервис и получите *75₽*  на баланс за каждого друга\\. Ваши друзья так же получат *75₽*  на баланс\\!_",
                 clientCount,
-                balance
+                balance,
+                daysAvailable
         );
 
+        // Кнопки меню
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
         InlineKeyboardButton payButton = new InlineKeyboardButton();
         payButton.setText("\uD83E\uDD33 Пополнить баланс");
@@ -364,13 +381,22 @@ public class TelegramBotService {
         myClientsButton.setText("\uD83D\uDD12 Мои VPN конфиги");
         myClientsButton.setCallbackData("my_clients");
 
+        /// Кнопка "Поделиться приглашением"
+        InlineKeyboardButton inviteFriendButton = new InlineKeyboardButton();
+        inviteFriendButton.setText("\uD83D\uDD17 Пригласить друга");
+        // Установка текста с отступом и ссылкой
+        inviteFriendButton.setSwitchInlineQuery("\n\n👇🏻 Присоединяйся к LOKIVPN по этой ссылке и получи 75 рублей на баланс: \n\nhttps://t.me/LokiVpnBot?start=" + generateReferralLink(getUserByChatId(chatId)));
+
+        // Установка кнопок в разметку
         inlineKeyboardMarkup.setKeyboard(List.of(
                 List.of(payButton),
-                List.of(myClientsButton)
+                List.of(myClientsButton),
+                List.of(inviteFriendButton) // Кнопка "Пригласить друга"
         ));
 
         messageSender.sendMessage(chatId, accountInfo, inlineKeyboardMarkup, "MarkdownV2");
     }
+
 
     // Список клиентов
     public void sendClientList(String chatId, Long userId) {
@@ -461,6 +487,12 @@ public class TelegramBotService {
                 .orElse(0); // Возвращаем 0, если пользователь не найден
     }
 
+    // Метод для получения пользователя по chatId
+    private User getUserByChatId(String chatId) {
+        return userRepository.findByChatId(Long.parseLong(chatId))
+                .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден"));
+    }
+
     // Получение списка клиентов у пользователя число
     public List<VpnClient> getClientsForUser(Long userId) {
         return vpnClientRepository.findByUserId(userId);
@@ -468,9 +500,7 @@ public class TelegramBotService {
 
     // Реферальная система
 
-    public String generateReferralLink(Long userId) {
-        User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
-
+    public String generateReferralLink(User user) {
         if (user.getReferralCode() == null) {
             user.setReferralCode(UUID.randomUUID().toString());
             userRepository.save(user);
@@ -479,13 +509,32 @@ public class TelegramBotService {
         return "https://t.me/LokiVpnBot?start=" + user.getReferralCode();
     }
 
+    private void sendReferralMenu(String chatId, User user) {
+        // Кнопка для генерации ссылки и возможности поделиться
+        InlineKeyboardButton shareButton = new InlineKeyboardButton();
+        shareButton.setText("🔗 Пригласить друга");
+        shareButton.setSwitchInlineQuery("\n\n👇🏻 Присоединяйся к LOKIVPN по этой ссылке и получи 75 рублей на баланс: \n\nhttps://t.me/LokiVpnBot?start=" + user.getReferralCode());
+
+        // Создание разметки с кнопками
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        inlineKeyboardMarkup.setKeyboard(List.of(
+                List.of(shareButton) // Новая кнопка для отправки приглашений
+        ));
+
+        // Текст сообщения со ссылкой
+        String referralStats = getReferralStats(user.getId());
+        messageSender.sendMessage(chatId, referralStats, inlineKeyboardMarkup);
+    }
+
     public String getReferralStats(Long userId) {
         User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
 
         return "👥 Приглашённые пользователи: " + user.getReferredUsersCount() + "\n" +
                 "💰 Бонусы за рефералов: " + user.getReferralBonus() + "₽\n" +
-                "🔗 Ваша реферальная ссылка: https://t.me/LokiVpnBot?start=" + user.getReferralCode();
+                "🔗 Ваша реферальная ссылка: https://t.me/LokiVpnBot?start=" + user.getReferralCode() + "\n\n" +
+                "📢 Поделитесь своей ссылкой с друзьями, чтобы получить больше бонусов!";
     }
+
 
 //Скачивание QR кода и конфига
 

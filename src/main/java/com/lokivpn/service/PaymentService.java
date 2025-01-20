@@ -105,12 +105,13 @@ public class PaymentService {
             Long chatIdLong = Long.parseLong(chatId);
 
             try {
-                Long userId = userRepository.findByChatId(chatIdLong)
-                        .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."))
-                        .getId();
+                User user = userRepository.findByChatId(chatIdLong)
+                        .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
+                Long userId = user.getId();
 
+                logger.info("Обработка платежа. ChatId: {}, UserId: {}", chatId, userId);
 
-                // Сохранение информации о платеже в таблицу payments
+                // Сохранение информации о платеже
                 PaymentRecord paymentRecord = new PaymentRecord();
                 paymentRecord.setUserId(userId);
                 paymentRecord.setAmount(payment.getTotalAmount()); // Сумма в копейках
@@ -119,6 +120,7 @@ public class PaymentService {
                 paymentRecord.setProviderPaymentId(payment.getProviderPaymentChargeId());
                 paymentRecord.setStatus("SUCCESS");
 
+                logger.info("Сохраняем платёж: {}", paymentRecord);
                 paymentRepository.save(paymentRecord);
 
                 // Обновление баланса пользователя
@@ -134,6 +136,7 @@ public class PaymentService {
             }
         }
     }
+
 
     protected void processReferral(User newUser, String referralCode, String chatId) {
         User referrer = userRepository.findByReferralCode(referralCode);

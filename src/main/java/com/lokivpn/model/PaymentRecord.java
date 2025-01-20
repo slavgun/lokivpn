@@ -33,8 +33,5 @@ public class PaymentRecord {
 
     @Column(name = "status", nullable = false)
     private String status;
-
-    @Column(name = "referral_bonus_applied", nullable = false)
-    private boolean referralBonusApplied;
 }
 
