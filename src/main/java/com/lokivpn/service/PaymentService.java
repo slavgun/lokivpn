@@ -28,13 +28,16 @@ public class PaymentService {
     private final TelegramMessageSender messageSender;
     private final PaymentRepository paymentRepository;
     private final UserRepository userRepository;
+    private final UserActionLogService userActionLogService;
 
     public PaymentService(TelegramMessageSender messageSender,
                           PaymentRepository paymentRepository,
-                          UserRepository userRepository) {
+                          UserRepository userRepository,
+                          UserActionLogService userActionLogService) {
         this.messageSender = messageSender;
         this.paymentRepository = paymentRepository;
         this.userRepository = userRepository;
+        this.userActionLogService = userActionLogService;
     }
 
     public void initiatePayment(String chatId, int amount) {
@@ -107,7 +110,7 @@ public class PaymentService {
             try {
                 User user = userRepository.findByChatId(chatIdLong)
                         .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
-                Long userId = user.getId();
+                Long userId = user.getChatId();
 
                 logger.info("Обработка платежа. ChatId: {}, UserId: {}", chatId, userId);
 
@@ -127,6 +130,9 @@ public class PaymentService {
                 int currentBalance = getUserBalance(userId);
                 int newBalance = currentBalance + payment.getTotalAmount() / 100; // Конвертация в рубли
                 updateUserBalance(userId, newBalance);
+
+                // Записываем действие
+                userActionLogService.logAction(userId, "Пополнение", payment.getTotalAmount() + "₽");
 
                 logger.info("Платёж успешно обработан, новый баланс: {}", newBalance);
                 sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа
@@ -156,6 +162,11 @@ public class PaymentService {
             // Начисляем бонус новому пользователю
             newUser.setReferralBonus(bonus);
             newUser.setBalance(newUser.getBalance() + bonus); // Добавляем на баланс
+
+            // Записываем историю
+            Long chatIdLong = Long.parseLong(chatId);
+            userActionLogService.logAction(chatIdLong, "Реферальный бонус", bonus + "₽");
+
 
             // Отправляем уведомления
             messageSender.sendMessage(referrer.getChatId().toString(), "🎉 Вы получили 75₽ за приглашение нового пользователя! Бонус добавлен на ваш баланс.");

@@ -1,7 +1,9 @@
 package com.lokivpn.service;
 
 import com.lokivpn.model.User;
+import com.lokivpn.model.UserActionLog;
 import com.lokivpn.model.VpnClient;
+import com.lokivpn.repository.UserActionLogRepository;
 import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
 import jakarta.persistence.EntityManager;
@@ -18,6 +20,9 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import java.io.File;
 import java.io.InputStream;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
@@ -34,19 +39,22 @@ public class TelegramBotService {
     private final UserRepository userRepository;
     private final InstructionService instructionService;
     private final SupportService supportService;
+    private final UserActionLogService userActionLogService;
 
     public TelegramBotService(TelegramMessageSender messageSender,
                               PaymentService paymentService,
                               VpnClientRepository vpnClientRepository,
                               UserRepository userRepository,
                               InstructionService instructionService,
-                              SupportService supportService) {
+                              SupportService supportService,
+                              UserActionLogService userActionLogService) {
         this.messageSender = messageSender;
         this.paymentService = paymentService;
         this.vpnClientRepository = vpnClientRepository;
         this.userRepository = userRepository;
         this.instructionService = instructionService;
         this.supportService = supportService;
+        this.userActionLogService = userActionLogService;
     }
 
     public void processUpdate(Update update) {
@@ -154,9 +162,13 @@ public class TelegramBotService {
                     messageSender.sendMessage(chatId, "Пользователь не найден. Пожалуйста, используйте /start для регистрации.");
                 }
                 break;
+            case "view_history": // Новый кейс для кнопки "История действий"
+                handleViewHistory(chatId, userId);
+                break;
             case "instruction_ios":
             case "instruction_android":
             case "instruction_windows":
+            case "instruction_android_tv":
                 // Убираем префикс "instruction_" перед передачей в метод
                 String deviceType = data.replace("instruction_", "");
                 instructionService.sendDeviceInstruction(chatId, deviceType);
@@ -250,6 +262,9 @@ public class TelegramBotService {
         InlineKeyboardButton clientButton = new InlineKeyboardButton("\uD83D\uDD12 Мои VPN конфиги");
         clientButton.setCallbackData("my_clients");
         markup.setKeyboard(List.of(List.of(clientButton)));
+
+        // Отправляем действие в лог
+        userActionLogService.logAction(chatIdLong, "Конфиг создан", null);
 
         messageSender.sendMessage(chatId,
                 String.format("✅Клиент '%s' успешно привязан. Скачать конфиг можно в личном кабинете.",
@@ -381,6 +396,10 @@ public class TelegramBotService {
         myClientsButton.setText("\uD83D\uDD12 Мои VPN конфиги");
         myClientsButton.setCallbackData("my_clients");
 
+        InlineKeyboardButton historyButton = new InlineKeyboardButton();
+        historyButton.setText("📜 История действий");
+        historyButton.setCallbackData("view_history");
+
         /// Кнопка "Поделиться приглашением"
         InlineKeyboardButton inviteFriendButton = new InlineKeyboardButton();
         inviteFriendButton.setText("\uD83D\uDD17 Пригласить друга");
@@ -391,6 +410,7 @@ public class TelegramBotService {
         inlineKeyboardMarkup.setKeyboard(List.of(
                 List.of(payButton),
                 List.of(myClientsButton),
+                List.of(historyButton),
                 List.of(inviteFriendButton) // Кнопка "Пригласить друга"
         ));
 
@@ -456,6 +476,40 @@ public class TelegramBotService {
         sendMessage(chatId, "Выберите действие:", inlineKeyboardMarkup);
     }
 
+    // История действий
+    private void handleViewHistory(String chatId, Long userId) {
+        List<UserActionLog> logs = userActionLogService.getLogsForUser(userId);
+
+        // Предположим, что временная зона пользователя хранится в базе данных или задаётся вручную
+        ZoneId userZoneId = ZoneId.of("Europe/Moscow"); // Пример для временной зоны Москвы
+
+        StringBuilder historyMessage = new StringBuilder("Баланс: " + getUserBalance(userId) + "₽\n\n");
+        historyMessage.append("```\n");
+        historyMessage.append(String.format("%-20s %-5s %-30s\n", "ДАТА, ВРЕМЯ", "₽", "ТИП"));
+
+        for (UserActionLog log : logs) {
+            // Преобразуем время из UTC (или другой стандартной зоны) в зону пользователя
+            ZonedDateTime userTime = log.getTimestamp().atZone(ZoneId.of("UTC")).withZoneSameInstant(userZoneId);
+
+            historyMessage.append(String.format("%-20s %-5s %-30s\n",
+                    userTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    log.getDetails(),
+                    log.getActionType()
+            ));
+        }
+
+        historyMessage.append("```");
+
+        // Создаем объект SendMessage с правильной структурой
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(chatId);
+        sendMessage.setText(historyMessage.toString());
+        sendMessage.setParseMode("MarkdownV2");
+
+        // Отправляем сообщение через messageSender
+        messageSender.sendMessage(sendMessage);
+    }
+
     // Отвязка клиента
     private void unbindClient(String chatId, Long clientId) {
         // Находим клиента
@@ -466,6 +520,10 @@ public class TelegramBotService {
         client.setAssigned(false);
         client.setUserId(null);
         vpnClientRepository.save(client);
+
+        //Записываем действие в лог
+        Long chatIdLong = Long.parseLong(chatId);
+        userActionLogService.logAction(chatIdLong, "Конфиг отвязан", null);
 
         // Сообщаем об успехе
         sendMessage(chatId, String.format("✅ Клиент '%s' успешно отвязан.", client.getClientName()));
