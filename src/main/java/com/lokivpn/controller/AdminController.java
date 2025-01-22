@@ -3,13 +3,12 @@ package com.lokivpn.controller;
 import com.lokivpn.model.*;
 import com.lokivpn.repository.*;
 import com.lokivpn.service.AdminLogService;
-import com.lokivpn.service.CustomAdminDetailsService;
+import com.lokivpn.security.CustomAdminDetailsService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController

@@ -1,7 +1,5 @@
-package com.lokivpn.config;
+package com.lokivpn.security;
 
-import com.lokivpn.service.CustomAdminDetailsService;
-import com.lokivpn.service.JwtService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

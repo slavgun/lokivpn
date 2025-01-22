@@ -1,4 +1,4 @@
-package com.lokivpn.service;
+package com.lokivpn.security;
 
 import com.lokivpn.model.Admin;
 import com.lokivpn.repository.AdminRepository;

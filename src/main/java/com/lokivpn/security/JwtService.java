@@ -1,4 +1,4 @@
-package com.lokivpn.service;
+package com.lokivpn.security;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;

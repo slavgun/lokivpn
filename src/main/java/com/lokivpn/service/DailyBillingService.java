@@ -45,7 +45,7 @@ public class DailyBillingService {
         this.telegramMessageSender = telegramMessageSender;
     }
 
-    @Scheduled(cron = "0 0 0 * * ?")
+    @Scheduled(cron = "0 0 0 * * ?", zone = "Europe/Moscow")
     public void processDailyBalances() {
         logger.info("Начало процесса биллинга...");
 
