@@ -213,7 +213,7 @@ public class TelegramBotService {
                 .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
 
         // Проверяем баланс пользователя
-        int minimumBalance = 110; // Минимальный баланс для получения клиента
+        int minimumBalance = 75; // Минимальный баланс для получения клиента
         if (user.getBalance() < minimumBalance) {
             InlineKeyboardMarkup markup = createPaymentButtons(); // Метод для создания кнопок оплаты
             messageSender.sendMessage(chatId,
@@ -224,7 +224,7 @@ public class TelegramBotService {
         // Отправляем запрос на подтверждение
         InlineKeyboardMarkup markup = createConfirmationButtons(null); // Передаем null, так как клиент пока не нужен
         messageSender.sendMessage(chatId,
-                "Подтвердите операцию ответом - подтвердить, если нажали случайно, нажмите - отмена", markup);
+                "Подтвердите операцию ответом - подтвердить, если нажали случайно, нажмите - отмена. Обратите внимание, что тариф на 1 клиент - 150р./мес.", markup);
     }
 
     // Кнопки подтверждения

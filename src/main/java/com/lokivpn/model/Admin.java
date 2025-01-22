@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.List;
+
 @Getter
 @Setter
 @Entity
@@ -23,4 +25,6 @@ public class Admin {
     @Column(nullable = false)
     private String password;
 
+    @OneToMany(mappedBy = "admin", cascade = CascadeType.ALL) // Связь "один ко многим"
+    private List<AdminLog> logs; // Список логов, связанных с админом
 }

@@ -34,4 +34,7 @@ public class User {
 
     @Column(name = "referred_users_count")
     private int referredUsersCount;
+
+    @Column(name = "banned", nullable = false)
+    private boolean banned;
 }
