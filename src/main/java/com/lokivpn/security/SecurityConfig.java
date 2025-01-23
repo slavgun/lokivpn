@@ -2,6 +2,7 @@ package com.lokivpn.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -10,6 +11,12 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.Arrays;
+import java.util.Collections;
 
 @Configuration
 public class SecurityConfig {
@@ -17,7 +24,6 @@ public class SecurityConfig {
     private final CustomAdminDetailsService customAdminDetailsService;
     private final JwtService jwtService;
 
-    // Внедрение зависимостей через конструктор
     public SecurityConfig(CustomAdminDetailsService customAdminDetailsService, JwtService jwtService) {
         this.customAdminDetailsService = customAdminDetailsService;
         this.jwtService = jwtService;
@@ -44,9 +50,11 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource())) // Enable CORS with custom configuration
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/login").permitAll()
-                        .requestMatchers("/api/admins/**", "/api/notifications/**").authenticated()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // Allow all OPTIONS requests
+                        .requestMatchers("/api/auth/login").permitAll() // Allow login endpoint
+                        .requestMatchers("/api/admins/**", "/api/notifications/**").authenticated() // Restrict admin and notification endpoints
                         .anyRequest().permitAll()
                 )
                 .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
@@ -59,18 +67,15 @@ public class SecurityConfig {
         return new JwtAuthenticationFilter(jwtService, customAdminDetailsService);
     }
 
-
-    /*@Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable()) // Отключение CSRF (если нужно)
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/login").permitAll() // Доступ без аутентификации
-                        .requestMatchers("/api/admins/**", "/api/notifications/**").authenticated() // Ограничение доступа
-                        .anyRequest().permitAll() // Остальные запросы разрешены
-                )
-                .httpBasic(httpBasic -> {}) // HTTP Basic Auth
-                .formLogin(formLogin -> formLogin.permitAll()); // Включение формы входа
-
-        return http.build();
-    }*/
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(Collections.singletonList("http://localhost:3000")); // Add your allowed origins here
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type"));
+        configuration.setAllowCredentials(true); // Allow credentials for cookies, headers, etc.
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
 }

@@ -3,7 +3,8 @@ package com.lokivpn.service;
 import com.lokivpn.model.User;
 import com.lokivpn.model.UserActionLog;
 import com.lokivpn.model.VpnClient;
-import com.lokivpn.repository.UserActionLogRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import com.lokivpn.repository.UserRepository;
 import com.lokivpn.repository.VpnClientRepository;
 import jakarta.persistence.EntityManager;
@@ -33,6 +34,9 @@ public class TelegramBotService {
     @PersistenceContext
     private EntityManager entityManager;
 
+    @Autowired
+    private Environment environment;
+
     private final TelegramMessageSender messageSender;
     private final PaymentService paymentService;
     private final VpnClientRepository vpnClientRepository;
@@ -56,6 +60,9 @@ public class TelegramBotService {
         this.supportService = supportService;
         this.userActionLogService = userActionLogService;
     }
+
+    @Autowired
+    private TokenService tokenService;
 
     public void processUpdate(Update update) {
         logger.info("Processing update: {}", update);
@@ -206,6 +213,10 @@ public class TelegramBotService {
 
     // Проверка баланса
     private void handleVpnRequest(String chatId) {
+        if (chatId == null || chatId.isEmpty()) {
+            throw new IllegalArgumentException("chatId не может быть null или пустым.");
+        }
+
         Long chatIdLong = Long.parseLong(chatId);
 
         // Получаем пользователя по chatId
@@ -217,7 +228,8 @@ public class TelegramBotService {
         if (user.getBalance() < minimumBalance) {
             InlineKeyboardMarkup markup = createPaymentButtons(); // Метод для создания кнопок оплаты
             messageSender.sendMessage(chatId,
-                    "\uD83D\uDD12 У вас недостаточно средств для получения VPN-клиента. Пожалуйста, пополните баланс.", markup);
+                    String.format("\uD83D\uDD12 У вас недостаточно средств для получения VPN-клиента. Ваш текущий баланс: %d₽. Минимальный баланс: %d₽. Пожалуйста, пополните баланс.",
+                            user.getBalance(), minimumBalance), markup);
             return;
         }
 
@@ -242,11 +254,24 @@ public class TelegramBotService {
 
     // Подтверждение и получение клиента
     private void confirmVpnBinding(String chatId) {
+        if (chatId == null || chatId.isEmpty()) {
+            throw new IllegalArgumentException("chatId не может быть null или пустым.");
+        }
+
         Long chatIdLong = Long.parseLong(chatId);
 
         // Проверяем наличие пользователя
         User user = userRepository.findByChatId(chatIdLong)
                 .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
+
+        // Проверяем баланс пользователя
+        int minimumBalance = 150; // Стоимость клиента
+        if (user.getBalance() < minimumBalance) {
+            messageSender.sendMessage(chatId,
+                    String.format("❌ У вас недостаточно средств. Ваш текущий баланс: %d₽. Для подключения клиента необходимо %d₽.",
+                            user.getBalance(), minimumBalance));
+            return;
+        }
 
         // Получаем первого доступного клиента
         VpnClient vpnClient = vpnClientRepository.findFirstByAssignedFalse()
@@ -255,20 +280,35 @@ public class TelegramBotService {
         // Привязываем клиента к пользователю
         vpnClient.setAssigned(true);
         vpnClient.setUserId(chatIdLong);
+
+        // Генерируем токен на основе пути к конфигу
+        String clientConfigPath = vpnClient.getConfigFile();
+        if (clientConfigPath == null || clientConfigPath.isEmpty()) {
+            messageSender.sendMessage(chatId, "❌ Ошибка: путь к конфигурации клиента отсутствует. Свяжитесь с поддержкой.");
+            return;
+        }
+
+        String token;
+        try {
+            token = tokenService.encrypt(clientConfigPath); // Вызов нестатического метода через экземпляр
+        } catch (Exception e) {
+            logger.error("Ошибка при генерации токена для клиента: {}", vpnClient.getClientName(), e);
+            messageSender.sendMessage(chatId, "❌ Ошибка при генерации токена. Свяжитесь с поддержкой.");
+            return;
+        }
+
+        // Сохраняем токен в базе данных
+        vpnClient.setEncryptedKey(token);
         vpnClientRepository.save(vpnClient);
 
-        // Отправляем уведомление
-        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-        InlineKeyboardButton clientButton = new InlineKeyboardButton("\uD83D\uDD12 Мои VPN конфиги");
-        clientButton.setCallbackData("my_clients");
-        markup.setKeyboard(List.of(List.of(clientButton)));
+        // Обновляем баланс пользователя
+        user.setBalance(user.getBalance() - minimumBalance);
+        userRepository.save(user);
 
-        // Отправляем действие в лог
-        userActionLogService.logAction(chatIdLong, "Конфиг создан", null);
-
+        // Отправляем пользователю токен
         messageSender.sendMessage(chatId,
-                String.format("✅Клиент '%s' успешно привязан. Скачать конфиг можно в личном кабинете.",
-                        vpnClient.getClientName()), markup);
+                String.format("✅ Клиент '%s' успешно привязан. Ваш уникальный ключ для подключения VPN:\n\n`%s`\n\n" +
+                        "Используйте его в приложении для Windows.", vpnClient.getClientName(), token));
     }
 
     // Отмена операции
@@ -454,6 +494,21 @@ public class TelegramBotService {
 
         VpnClient client = optionalClient.get();
 
+        // Проверяем, есть ли у клиента токен
+        String encryptedKey = client.getEncryptedKey();
+        if (encryptedKey == null || encryptedKey.isEmpty()) {
+            sendMessage(chatId, "❕Клиент не имеет привязки ключа. Свяжитесь с поддержкой.");
+            return;
+        }
+
+        // Формируем текст сообщения с ключом
+        String message = String.format(
+                "Информация о клиенте '%s':\n\n" +
+                        "Ваш уникальный ключ для подключения VPN:\n\n" +
+                        "`%s`\n\n" +
+                        "Выберите действие:", client.getClientName(), encryptedKey);
+
+        // Создаем кнопки
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
 
@@ -473,7 +528,8 @@ public class TelegramBotService {
         rows.add(List.of(unbindButton));
         inlineKeyboardMarkup.setKeyboard(rows);
 
-        sendMessage(chatId, "Выберите действие:", inlineKeyboardMarkup);
+        // Отправляем сообщение
+        sendMessage(chatId, message, inlineKeyboardMarkup);
     }
 
     // История действий

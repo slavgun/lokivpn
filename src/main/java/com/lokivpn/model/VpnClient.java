@@ -35,4 +35,6 @@ public class VpnClient {
     @Transient
     private String publicKey;
 
+    @Column(name = "encrypted_key")
+    private String encryptedKey;
 }
