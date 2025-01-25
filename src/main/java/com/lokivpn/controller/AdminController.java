@@ -1,5 +1,7 @@
 package com.lokivpn.controller;
 
+import com.lokivpn.DTO.AdminDTO;
+import com.lokivpn.DTO.AdminLogDTO;
 import com.lokivpn.model.*;
 import com.lokivpn.repository.*;
 import com.lokivpn.service.AdminLogService;
@@ -10,6 +12,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/admins")
@@ -64,13 +67,16 @@ public class AdminController {
         return ResponseEntity.ok(payments);
     }
 
-    // Получение информации о платеже по ID
-    @GetMapping("/payments/{id}")
-    public ResponseEntity<PaymentRecord> getPaymentById(@PathVariable Long id) {
-        return paymentRepository.findById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    // Получение информации о платежах по userId
+    @GetMapping("/payments/user/{userId}")
+    public ResponseEntity<List<PaymentRecord>> getPaymentsByUserId(@PathVariable Long userId) {
+        List<PaymentRecord> payments = paymentRepository.findByUserId(userId);
+        if (payments.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(payments);
     }
+
 
 // Пользователи
 
@@ -134,6 +140,18 @@ public class AdminController {
         }
     }
 
+    // Получение списка всех администраторов
+    @GetMapping("/list")
+    public ResponseEntity<List<AdminDTO>> getAllAdmins() {
+        List<Admin> admins = adminRepository.findAll();
+        List<AdminDTO> adminDTOs = admins.stream().map(admin -> new AdminDTO(
+                admin.getId(),
+                admin.getUsername(),
+                admin.getUser_id()
+        )).collect(Collectors.toList());
+        return ResponseEntity.ok(adminDTOs);
+    }
+
     // Пополнить баланс пользователя
     @PostMapping("/users/{id}/add-balance")
     public ResponseEntity<String> addBalance(@PathVariable Long id, @RequestParam int amount) {
@@ -143,7 +161,7 @@ public class AdminController {
 
             Admin currentAdmin = adminRepository.findById(customAdminDetailsService.getCurrentAdminId())
                     .orElseThrow(() -> new RuntimeException("Администратор не найден"));
-            adminLogService.logAction(currentAdmin, "ADD_BALANCE", user.getId(), "Добавлено " + amount + " к балансу пользователя с ID " + user.getId());
+            adminLogService.logAction(currentAdmin, "ADD_BALANCE", user.getChatId(), "Добавлено " + amount + " к балансу пользователя с ID " + user.getId());
 
             return ResponseEntity.ok("Balance added successfully.");
         }).orElse(ResponseEntity.status(404).body("User not found."));
@@ -161,7 +179,7 @@ public class AdminController {
 
             Admin currentAdmin = adminRepository.findById(customAdminDetailsService.getCurrentAdminId())
                     .orElseThrow(() -> new RuntimeException("Администратор не найден"));
-            adminLogService.logAction(currentAdmin, "SUBTRACT_BALANCE", user.getId(), "Вычтено " + amount + " с баланса пользователя с ID " + user.getId());
+            adminLogService.logAction(currentAdmin, "SUBTRACT_BALANCE", user.getChatId(), "Вычтено " + amount + " с баланса пользователя с ID " + user.getId());
 
             return ResponseEntity.ok("Balance subtracted successfully.");
         }).orElse(ResponseEntity.status(404).body("User not found."));
@@ -180,7 +198,7 @@ public class AdminController {
 
             Admin currentAdmin = adminRepository.findById(customAdminDetailsService.getCurrentAdminId())
                     .orElseThrow(() -> new RuntimeException("Администратор не найден"));
-            adminLogService.logAction(currentAdmin, "ADD_CLIENT", user.getId(), "Привязан клиент с ID " + clientId + " к пользователю с ID " + userId);
+            adminLogService.logAction(currentAdmin, "ADD_CLIENT", user.getChatId(), "Привязан клиент с ID " + clientId + " к пользователю с ID " + userId);
 
             return ResponseEntity.ok("Client assigned to user successfully.");
         })).orElse(ResponseEntity.status(404).body("User or client not found."));
@@ -235,27 +253,26 @@ public class AdminController {
         }).orElse(ResponseEntity.status(404).body("User not found."));
     }
 
-    // Удалить пользователя из базы данных
-    @DeleteMapping("/users/delete/{id}")
-    public ResponseEntity<String> deleteUser(@PathVariable Long id) {
-        if (userRepository.existsById(id)) {
-            userRepository.deleteById(id);
+    @DeleteMapping("/users/delete/{chatId}")
+    public ResponseEntity<String> deleteUser(@PathVariable Long chatId) {
+        return userRepository.findByChatId(chatId).map(user -> {
+            userRepository.delete(user);
 
             Admin currentAdmin = adminRepository.findById(customAdminDetailsService.getCurrentAdminId())
                     .orElseThrow(() -> new RuntimeException("Администратор не найден"));
-            adminLogService.logAction(currentAdmin, "DELETE_USER", id, "Удалён пользователь с ID " + id);
-
+            adminLogService.logAction(currentAdmin, "DELETE_USER", chatId, "Удалён пользователь с Chat ID " + chatId);
 
             return ResponseEntity.ok("User deleted successfully.");
-        }
-        return ResponseEntity.status(404).body("User not found.");
+        }).orElse(ResponseEntity.status(404).body("User not found."));
     }
 
-    // Получение логов
     @GetMapping("/logs")
-    public ResponseEntity<List<AdminLog>> getAllLogs() {
+    public ResponseEntity<List<AdminLogDTO>> getAllLogs() {
         List<AdminLog> logs = adminLogRepository.findAll();
-        return ResponseEntity.ok(logs);
+        List<AdminLogDTO> logDTOs = logs.stream()
+                .map(AdminLogDTO::new)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(logDTOs);
     }
 
 }
