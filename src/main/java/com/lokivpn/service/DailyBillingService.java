@@ -118,6 +118,7 @@ public class DailyBillingService {
             return;
         }
 
+        // Обнуление данных клиентов и сохранение в БД
         for (VpnClient client : clients) {
             client.setAssigned(false);
             client.setUserId(null);
@@ -125,14 +126,15 @@ public class DailyBillingService {
             client.setDeviceType(null);
             userActionLogService.logAction(chatId, "Клиент отвязан", "Клиент " + client.getClientName() + " отвязан из-за недостатка средств.");
         }
-
         vpnClientRepository.saveAll(clients);
+
         logger.warn("Клиенты пользователя {} были отвязаны из-за недостатка средств.", chatId);
+
+        // Вызов метода для перегенерации клиентов на сервере
+        processClientsIndividually(clients);
 
         sendClientsRemovedNotification(chatId);
     }
-
-
 
     public void processClientsIndividually(List<VpnClient> clients) {
         logger.info("Начало обработки клиентов");
@@ -208,7 +210,7 @@ public class DailyBillingService {
 
     @Async
     public void sendLowBalanceNotification(Long chatId) {
-        telegramMessageSender.sendNotification(chatId, "\uD83D\uDCB3 У вас заканчиваются средства на балансе.");
+        telegramMessageSender.sendNotification(chatId, "\uD83D\uDCB3 У вас заканчиваются средства на балансе. Пополните счёт в личном кабинете по кнопке '\uD83E\uDD33\uD83C\uDFFBПополнить баланс'");
     }
 
     @Async
