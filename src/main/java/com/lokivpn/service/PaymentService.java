@@ -132,7 +132,7 @@ public class PaymentService {
                 updateUserBalance(userId, newBalance);
 
                 // Записываем действие
-                userActionLogService.logAction(userId, "Пополнение", payment.getTotalAmount() + "₽");
+                userActionLogService.logAction(userId, "Пополнение", payment.getTotalAmount() / 100 + "₽");
 
                 logger.info("Платёж успешно обработан, новый баланс: {}", newBalance);
                 sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа

@@ -37,4 +37,7 @@ public class VpnClient {
 
     @Column(name = "encrypted_key")
     private String encryptedKey;
+
+    @Column(name = "device_type", nullable = true)
+    private String deviceType;
 }

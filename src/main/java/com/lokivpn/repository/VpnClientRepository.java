@@ -27,4 +27,5 @@ public interface VpnClientRepository extends JpaRepository<VpnClient, Long> {
     @Query("UPDATE VpnClient v SET v.assigned = false, v.userId = null WHERE v.userId = :userId")
     void unassignClientsByUserId(Long userId);
 
+    boolean existsByEncryptedKey(String encryptedKey);
 }

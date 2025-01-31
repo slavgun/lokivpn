@@ -37,6 +37,9 @@ public class DailyBillingService {
     @Autowired
     private RestTemplate restTemplate;
 
+    @Autowired
+    private UserActionLogService userActionLogService;
+
     public DailyBillingService(UserRepository userRepository,
                                VpnClientRepository vpnClientRepository,
                                TelegramMessageSender telegramMessageSender) {
@@ -108,17 +111,28 @@ public class DailyBillingService {
 
     private void handleInsufficientBalance(User user) {
         Long chatId = user.getChatId();
-
         List<VpnClient> clients = vpnClientRepository.findByUserId(chatId);
 
-        vpnClientRepository.unassignClientsByUserId(chatId);
-        logger.warn("Клиенты пользователя {} были отвязаны из-за недостатка средств.", chatId);
+        if (clients.isEmpty()) {
+            logger.info("У пользователя {} нет активных клиентов.", chatId);
+            return;
+        }
 
-        // Удаляем только клиентов по одному, без перегенерации
-        processClientsIndividually(clients);
+        for (VpnClient client : clients) {
+            client.setAssigned(false);
+            client.setUserId(null);
+            client.setEncryptedKey(null);
+            client.setDeviceType(null);
+            userActionLogService.logAction(chatId, "Клиент отвязан", "Клиент " + client.getClientName() + " отвязан из-за недостатка средств.");
+        }
+
+        vpnClientRepository.saveAll(clients);
+        logger.warn("Клиенты пользователя {} были отвязаны из-за недостатка средств.", chatId);
 
         sendClientsRemovedNotification(chatId);
     }
+
+
 
     public void processClientsIndividually(List<VpnClient> clients) {
         logger.info("Начало обработки клиентов");

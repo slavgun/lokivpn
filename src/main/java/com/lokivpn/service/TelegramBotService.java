@@ -64,6 +64,9 @@ public class TelegramBotService {
     @Autowired
     private TokenService tokenService;
 
+    @Autowired
+    private TelegramMessageSender telegramMessageSender;
+
     public void processUpdate(Update update) {
         logger.info("Processing update: {}", update);
 
@@ -146,7 +149,7 @@ public class TelegramBotService {
                 handleVpnRequest(chatId);
                 break;
             case "my_clients":
-                sendClientList(chatId, Long.parseLong(chatId)); // Используем chatId как userId
+                sendClientList(chatId, userId);
                 break;
             case "pay":
                 sendPaymentRequestMessage(chatId);
@@ -161,29 +164,49 @@ public class TelegramBotService {
                 sendWelcomeMessage(chatId);
                 break;
             case "referral":
-                Optional<User> userOptional = userRepository.findByChatId(Long.parseLong(chatId));
+                Optional<User> userOptional = userRepository.findByChatId(userId);
                 if (userOptional.isPresent()) {
-                    User user = userOptional.get();
-                    sendReferralMenu(chatId, user);
+                    sendReferralMenu(chatId, userOptional.get());
                 } else {
                     messageSender.sendMessage(chatId, "Пользователь не найден. Пожалуйста, используйте /start для регистрации.");
                 }
                 break;
-            case "view_history": // Новый кейс для кнопки "История действий"
+            case "view_history":
                 handleViewHistory(chatId, userId);
                 break;
             case "instruction_ios":
             case "instruction_android":
             case "instruction_windows":
             case "instruction_android_tv":
-                // Убираем префикс "instruction_" перед передачей в метод
                 String deviceType = data.replace("instruction_", "");
                 instructionService.sendDeviceInstruction(chatId, deviceType);
                 break;
             default:
                 if (data.startsWith("client_")) {
                     Long clientId = Long.parseLong(data.split("_")[1]);
-                    sendClientDetails(chatId, clientId);
+                    VpnClient client = vpnClientRepository.findById(clientId)
+                            .orElseThrow(() -> new RuntimeException("Клиент не найден"));
+
+                    // Если устройство не выбрано, предлагаем выбрать
+                    if (client.getDeviceType() == null) {
+                        askDeviceType(chatId, clientId);
+                    } else {
+                        sendClientDetails(chatId, clientId);
+                    }
+                } else if (data.startsWith("device_")) {
+                    Long clientId = Long.parseLong(data.split("_")[1]);
+                    deviceType = data.split("_")[2];
+
+                    if (deviceType.equals("PC") || deviceType.equals("TV")) {
+                        saveDeviceTypeAndShowConfig(chatId, clientId, deviceType);
+                    } else {
+                        askOperatingSystem(chatId, clientId);
+                    }
+                } else if (data.startsWith("os_")) {
+                    Long clientId = Long.parseLong(data.split("_")[1]);
+                    String osType = data.split("_")[2];
+
+                    saveDeviceTypeAndShowConfig(chatId, clientId, osType);
                 } else if (data.startsWith("download_config_")) {
                     Long clientId = Long.parseLong(data.split("_")[2]);
                     downloadConfig(chatId, clientId);
@@ -191,7 +214,7 @@ public class TelegramBotService {
                     Long clientId = Long.parseLong(data.split("_")[2]);
                     downloadQr(chatId, clientId);
                 } else if (data.startsWith("pay_")) {
-                    int amount = Integer.parseInt(data.split("_")[1]); // Получение суммы из callbackData
+                    int amount = Integer.parseInt(data.split("_")[1]);
                     paymentService.initiatePayment(chatId, amount);
                 } else if (data.startsWith("confirm_vpn_")) {
                     confirmVpnBinding(chatId);
@@ -200,7 +223,6 @@ public class TelegramBotService {
                 } else if (data.startsWith("unbind_client_")) {
                     Long clientId = Long.parseLong(data.split("_")[2]);
                     unbindClient(chatId, clientId);
-                    return;
                 } else {
                     logger.warn("Unknown callback data: {}", data);
                     messageSender.sendMessage(chatId, "❕Неизвестная команда.❕");
@@ -208,6 +230,7 @@ public class TelegramBotService {
                 break;
         }
     }
+
 
 //Получить VPN
 
@@ -281,16 +304,10 @@ public class TelegramBotService {
         vpnClient.setAssigned(true);
         vpnClient.setUserId(chatIdLong);
 
-        // Генерируем токен на основе пути к конфигу
-        String clientConfigPath = vpnClient.getConfigFile();
-        if (clientConfigPath == null || clientConfigPath.isEmpty()) {
-            messageSender.sendMessage(chatId, "❌ Ошибка: путь к конфигурации клиента отсутствует. Свяжитесь с поддержкой.");
-            return;
-        }
-
+        // Генерируем уникальный 12-значный ключ
         String token;
         try {
-            token = tokenService.encrypt(clientConfigPath); // Вызов нестатического метода через экземпляр
+            token = generateUniqueKey(); // Теперь используем тот же метод генерации!
         } catch (Exception e) {
             logger.error("Ошибка при генерации токена для клиента: {}", vpnClient.getClientName(), e);
             messageSender.sendMessage(chatId, "❌ Ошибка при генерации токена. Свяжитесь с поддержкой.");
@@ -307,9 +324,9 @@ public class TelegramBotService {
 
         // Отправляем пользователю токен
         messageSender.sendMessage(chatId,
-                String.format("✅ Клиент '%s' успешно привязан. Ваш уникальный ключ для подключения VPN:\n\n`%s`\n\n" +
-                        "Используйте его в приложении для Windows.", vpnClient.getClientName(), token));
+                String.format("✅ Клиент '%s' успешно привязан. Найти его можете в разделе 'Мои конфиги'.", vpnClient.getClientName()));
     }
+
 
     // Отмена операции
     private void cancelVpnRequest(String chatId) {
@@ -472,18 +489,39 @@ public class TelegramBotService {
 
         for (int i = 0; i < clients.size(); i++) {
             VpnClient client = clients.get(i);
+
+            // Определяем иконку устройства
+            String deviceLabel = "";
+            if (client.getDeviceType() != null) {
+                switch (client.getDeviceType()) {
+                    case "Android":
+                        deviceLabel = " (🤖 Android)";
+                        break;
+                    case "IOS":
+                        deviceLabel = " (🍏 iOS)";
+                        break;
+                    case "PC":
+                        deviceLabel = " (💻 ПК)";
+                        break;
+                    case "TV":
+                        deviceLabel = " (📺 ТВ)";
+                        break;
+                    default:
+                        deviceLabel = "";
+                }
+            }
+
             InlineKeyboardButton clientButton = new InlineKeyboardButton();
-            clientButton.setText("Конфиг⮚ #" + (i + 1)); // Форматируем текст кнопки
-            clientButton.setCallbackData("client_" + client.getId()); // Используем оригинальный ID в callbackData
+            clientButton.setText("Конфиг #" + (i + 1) + deviceLabel); // Отображаем номер + платформу с иконкой
+            clientButton.setCallbackData("client_" + client.getId());
             rows.add(Collections.singletonList(clientButton));
         }
 
         inlineKeyboardMarkup.setKeyboard(rows);
-
         sendMessage(chatId, "\uD83D\uDCC2 Список конфигураций:", inlineKeyboardMarkup);
     }
 
-    // Меню клиента
+
     public void sendClientDetails(String chatId, Long clientId) {
         Optional<VpnClient> optionalClient = vpnClientRepository.findById(clientId);
 
@@ -493,20 +531,26 @@ public class TelegramBotService {
         }
 
         VpnClient client = optionalClient.get();
-
-        // Проверяем, есть ли у клиента токен
         String encryptedKey = client.getEncryptedKey();
+
+        // Если ключ отсутствует или пустой, генерируем новый 12-значный уникальный ключ
         if (encryptedKey == null || encryptedKey.isEmpty()) {
-            sendMessage(chatId, "❕Клиент не имеет привязки ключа. Свяжитесь с поддержкой.");
-            return;
+            try {
+                encryptedKey = generateUniqueKey(); // Генерация уникального ключа
+                client.setEncryptedKey(encryptedKey);
+                vpnClientRepository.save(client); // Сохраняем в базу
+                logger.info("Сгенерирован новый уникальный ключ для клиента '{}'", client.getClientName());
+            } catch (Exception e) {
+                logger.error("Ошибка при генерации уникального ключа для клиента '{}': {}", client.getClientName(), e.getMessage(), e);
+                sendMessage(chatId, "❌ Ошибка при генерации ключа. Свяжитесь с поддержкой.");
+                return;
+            }
         }
 
-        // Формируем текст сообщения с ключом
+        // Формируем текст сообщения
         String message = String.format(
-                "Информация о клиенте '%s':\n\n" +
-                        "Ваш уникальный ключ для подключения VPN:\n\n" +
-                        "`%s`\n\n" +
-                        "Выберите действие:", client.getClientName(), encryptedKey);
+                "Ваш уникальный ключ для подключения VPN:\n\n" +
+                        "```\n%s\n```\n", escapeMarkdownV2(encryptedKey));
 
         // Создаем кнопки
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
@@ -529,8 +573,114 @@ public class TelegramBotService {
         inlineKeyboardMarkup.setKeyboard(rows);
 
         // Отправляем сообщение
-        sendMessage(chatId, message, inlineKeyboardMarkup);
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(chatId);
+        sendMessage.setText(message);
+        sendMessage.setParseMode("MarkdownV2");
+        sendMessage.setReplyMarkup(inlineKeyboardMarkup);
+
+        telegramMessageSender.sendMessage(sendMessage);
     }
+
+    private String generateUniqueKey() {
+        String key;
+        do {
+            key = generateSecureRandomKey(12); // Генерируем случайный 12-значный ключ
+        } while (vpnClientRepository.existsByEncryptedKey(key)); // Проверяем, есть ли такой ключ в БД
+
+        return key;
+    }
+
+    private String generateSecureRandomKey(int length) {
+        String upperCase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        String lowerCase = "abcdefghijklmnopqrstuvwxyz";
+        String numbers = "0123456789";
+        String specialChars = "!@#$%^&*()-_=+<>?";
+
+        String allChars = upperCase + lowerCase + numbers + specialChars;
+
+        StringBuilder key = new StringBuilder();
+        Random random = new Random();
+
+        // Гарантируем наличие хотя бы одного символа из каждой категории
+        key.append(upperCase.charAt(random.nextInt(upperCase.length())));
+        key.append(lowerCase.charAt(random.nextInt(lowerCase.length())));
+        key.append(numbers.charAt(random.nextInt(numbers.length())));
+        key.append(specialChars.charAt(random.nextInt(specialChars.length())));
+
+        // Оставшиеся символы заполняем случайными из всех доступных
+        for (int i = 4; i < length; i++) {
+            key.append(allChars.charAt(random.nextInt(allChars.length())));
+        }
+
+        // Перемешиваем символы
+        List<Character> keyChars = new ArrayList<>();
+        for (char c : key.toString().toCharArray()) {
+            keyChars.add(c);
+        }
+        Collections.shuffle(keyChars);
+
+        // Собираем строку обратно
+        StringBuilder shuffledKey = new StringBuilder();
+        for (char c : keyChars) {
+            shuffledKey.append(c);
+        }
+
+        return shuffledKey.toString();
+    }
+
+
+    private void askDeviceType(String chatId, Long clientId) {
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        InlineKeyboardButton smartphoneButton = new InlineKeyboardButton("📱 Смартфон");
+        smartphoneButton.setCallbackData("device_" + clientId + "_Smartphone");
+
+        InlineKeyboardButton pcButton = new InlineKeyboardButton("💻 ПК");
+        pcButton.setCallbackData("device_" + clientId + "_PC");
+
+        InlineKeyboardButton tvButton = new InlineKeyboardButton("📺 Телевизор");
+        tvButton.setCallbackData("device_" + clientId + "_TV");
+
+        rows.add(List.of(smartphoneButton, pcButton, tvButton));
+        markup.setKeyboard(rows);
+
+        sendMessage(chatId, "Выберите устройство, на котором будет использоваться конфигурация:", markup);
+    }
+
+    private void askOperatingSystem(String chatId, Long clientId) {
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        InlineKeyboardButton androidButton = new InlineKeyboardButton("🤖 Android");
+        androidButton.setCallbackData("os_" + clientId + "_Android");
+
+        InlineKeyboardButton iosButton = new InlineKeyboardButton("🍏 iOS");
+        iosButton.setCallbackData("os_" + clientId + "_IOS");
+
+        rows.add(List.of(androidButton, iosButton));
+        markup.setKeyboard(rows);
+
+        sendMessage(chatId, "Выберите операционную систему:", markup);
+    }
+
+    private void saveDeviceTypeAndShowConfig(String chatId, Long clientId, String deviceType) {
+        VpnClient client = vpnClientRepository.findById(clientId)
+                .orElseThrow(() -> new RuntimeException("Клиент не найден"));
+
+        client.setDeviceType(deviceType);
+        vpnClientRepository.save(client);
+
+        sendClientDetails(chatId, clientId);
+    }
+
+
+    // Метод для экранирования спецсимволов в MarkdownV2
+    private String escapeMarkdownV2(String text) {
+        return text.replaceAll("([_\\*\\[\\]()~`>#+\\-=|{}.!])", "\\\\$1");
+    }
+
 
     // История действий
     private void handleViewHistory(String chatId, Long userId) {
@@ -566,18 +716,20 @@ public class TelegramBotService {
         messageSender.sendMessage(sendMessage);
     }
 
-    // Отвязка клиента
     private void unbindClient(String chatId, Long clientId) {
         // Находим клиента
         VpnClient client = vpnClientRepository.findById(clientId)
                 .orElseThrow(() -> new RuntimeException("Клиент не найден, хотя он отображается у пользователя."));
 
-        // Убираем привязку клиента
+        // Убираем привязку клиента и обнуляем device_type
         client.setAssigned(false);
         client.setUserId(null);
+        client.setEncryptedKey(null);
+        client.setDeviceType(null); // Обнуляем тип устройства
+
         vpnClientRepository.save(client);
 
-        //Записываем действие в лог
+        // Записываем действие в лог
         Long chatIdLong = Long.parseLong(chatId);
         userActionLogService.logAction(chatIdLong, "Конфиг отвязан", null);
 
