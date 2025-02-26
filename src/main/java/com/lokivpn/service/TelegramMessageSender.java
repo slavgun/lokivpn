@@ -174,9 +174,11 @@ public class TelegramMessageSender {
 
     public File getConfigFile(VpnClient vpnClient) {
         String remoteFilePath = vpnClient.getConfigFile();
-        String localFilePath = "/tmp/" + vpnClient.getClientName() + ".conf"; // Используем временный путь
+        String localFilePath = "/tmp/" + vpnClient.getClientName() + ".conf"; // Временный путь
+
+        logger.info("Начинаем скачивание файла {} с сервера {}", remoteFilePath, vpnClient.getServer());
+
         try {
-            // Используем SCP для загрузки файла
             Process process = Runtime.getRuntime().exec(new String[]{
                     "scp", "root@" + vpnClient.getServer() + ":" + remoteFilePath, localFilePath
             });
@@ -192,66 +194,28 @@ public class TelegramMessageSender {
 
             // Ожидание завершения процесса
             process.waitFor();
+            logger.info("Команда SCP завершилась с кодом: {}", process.exitValue());
 
-            // Проверка завершения команды
             if (process.exitValue() != 0) {
+                logger.error("Ошибка SCP: {}", errorOutput.toString());
                 throw new RuntimeException("Ошибка SCP: " + errorOutput.toString());
             }
 
-            // Проверяем, что файл был скачан
+            // Проверяем, что файл скачался
             File file = new File(localFilePath);
             if (file.exists()) {
+                logger.info("Файл успешно скачан: {}", file.getAbsolutePath());
                 return file;
             } else {
-                throw new RuntimeException("Не удалось скачать файл конфигурации.");
+                logger.error("Файл не найден после SCP: {}", localFilePath);
+                throw new RuntimeException("Файл не найден после SCP: " + localFilePath);
             }
         } catch (Exception e) {
+            logger.error("Ошибка при загрузке файла конфигурации: {}", e.getMessage(), e);
             throw new RuntimeException("Ошибка при загрузке файла конфигурации: " + e.getMessage(), e);
         }
     }
 
-    public File getQrCodeFile(VpnClient vpnClient) {
-        // Получаем путь удаленного файла и временный путь для сохранения локально
-        String remoteFilePath = vpnClient.getQrCodePath();
-        String localFilePath = "/tmp/" + vpnClient.getClientName() + ".png"; // Используем временный путь
-
-        try {
-            // Формируем и выполняем SCP команду
-            Process process = Runtime.getRuntime().exec(new String[]{
-                    "scp", "root@" + vpnClient.getServer() + ":" + remoteFilePath, localFilePath
-            });
-
-            // Читаем поток ошибок для логирования
-            BufferedReader errorReader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-            StringBuilder errorOutput = new StringBuilder();
-            String line;
-            while ((line = errorReader.readLine()) != null) {
-                errorOutput.append(line).append("\n");
-            }
-            errorReader.close();
-
-            // Ожидаем завершения процесса
-            process.waitFor();
-
-            // Проверяем завершение процесса на успешность
-            if (process.exitValue() != 0) {
-                throw new RuntimeException("Ошибка SCP: " + errorOutput.toString());
-            }
-
-            // Проверяем наличие загруженного файла
-            File file = new File(localFilePath);
-            if (file.exists()) {
-                logger.info("QR-код успешно загружен: {}", localFilePath);
-                return file;
-            } else {
-                throw new RuntimeException("Не удалось скачать QR-код: файл не найден локально.");
-            }
-        } catch (Exception e) {
-            // Логируем ошибку и выбрасываем исключение
-            logger.error("Ошибка при загрузке QR-кода: {}", e.getMessage(), e);
-            throw new RuntimeException("Ошибка при загрузке QR-кода: " + e.getMessage(), e);
-        }
-    }
 
     public void sendFile(String chatId, File file, String caption) {
         if (!file.exists()) {
@@ -291,6 +255,31 @@ public class TelegramMessageSender {
             bot.execute(answer);
         } catch (TelegramApiException e) {
             logger.error("Error sending pre-checkout query: {}", e.getMessage(), e);
+        }
+    }
+
+    // Метод отправки APK
+
+    public void sendApkFile(String chatId, String filePath) {
+        File apkFile = new File(filePath);
+
+        if (!apkFile.exists()) {
+            logger.error("Файл APK не найден: {}", apkFile.getAbsolutePath());
+            sendMessage(chatId, "❌ Ошибка: APK-файл не найден.");
+            return;
+        }
+
+        SendDocument sendDocument = new SendDocument();
+        sendDocument.setChatId(chatId);
+        sendDocument.setDocument(new InputFile(apkFile));
+        sendDocument.setCaption("📲 Установите приложение Loki VPN и следуйте инструкции ниже.");
+
+        try {
+            bot.execute(sendDocument);
+            logger.info("APK-файл {} успешно отправлен пользователю {}", apkFile.getAbsolutePath(), chatId);
+        } catch (TelegramApiException e) {
+            logger.error("Ошибка отправки APK-файла: {}", e.getMessage(), e);
+            sendMessage(chatId, "❌ Ошибка при отправке APK-файла.");
         }
     }
 }

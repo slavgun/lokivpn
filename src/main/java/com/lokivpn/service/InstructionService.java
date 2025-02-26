@@ -3,10 +3,14 @@ package com.lokivpn.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -43,8 +47,8 @@ public class InstructionService {
             windowsButton.setCallbackData("instruction_windows");
 
             InlineKeyboardButton androidTvButton = new InlineKeyboardButton();
-            windowsButton.setText("📺 Android TV");
-            windowsButton.setCallbackData("instruction_android_tv");
+            androidTvButton.setText("📺 Android TV"); // Исправлено!
+            androidTvButton.setCallbackData("instruction_android_tv");
 
             // Создаем разметку кнопок
             InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
@@ -56,6 +60,9 @@ public class InstructionService {
             markup.setKeyboard(Arrays.asList(row1, row2, row3, row4));
 
             message.setReplyMarkup(markup);
+
+            // Логируем перед отправкой
+            logger.info("Отправляем сообщение с выбором устройства: {}", message);
 
             // Отправляем сообщение через TelegramMessageService
             telegramMessageService.sendMessage(message);
@@ -90,18 +97,20 @@ public class InstructionService {
                     instructionText = """
                             Инструкция для <b>Android</b>:
                             
-                            1️⃣ Установите приложение <a href="https://play.google.com/store/apps/details?id=com.wireguard.android">WireGuard</a> из Google Play.
-                            2️⃣ Скачайте конфигурацию и импортируйте её в приложение.
-                            - Нажмите "<b>\uD83C\uDFE0 Личный кабинет</b>", далее "<b>\uD83D\uDD12 Мои VPN конфиги</b>", выберите нужный ключ и скачайте конфиг.
-                            - Сохраните конфиг на свое устройство.
-                            3️⃣ Зайдите в приложение <b>WireGuard</b>.
-                            - Нажмите (<b>+</b>) в правом нижнем углу.
-                            - "Import from file or archive".
-                            - Найдите и нажмите на скачанный конфиг.
-                            4️⃣ Нажмите "<b>Включить</b>" и наслаждайтесь подключением!
-                            
-                            Инструкция с картинками - <a href="https://telegra.ph/LOKI-VPN-dlya-android-podklyuchenie-02-26">Посмотреть🔍</a>
+                            1️⃣ Установите, apk файл прикреплен к сообщению.
+                            2️⃣ Откройте ваш конфиг в разделе "Мои конфиги" и скопируйте ключ.
+                            - Нажмите "<b>\uD83C\uDFE0 Личный кабинет</b>", далее "<b>\uD83D\uDD12 Мои VPN конфиги</b>", выберите нужный ключ и скопируйте ключ.
+                            - Если не привязали устройство, то выберите устройство "смартфон" и платформу "android".
+                            3️⃣ Установите и зайдите в приложение <b>Loki VPN</b>.
+                            - Нажмите на (<b>+</b>) в правом нижнем углу, справа от 👉🏻 смайлика .
+                            - Введите любое имя для конфига.
+                            - Вставьте ключ клиента.
+                            4️⃣ Нажмите на кнопку включения и наслаждайтесь подключением!
                             """;
+
+                    // Отправка APK-файла
+                    String apkPath = "/home/apk/lokivpn.apk"; // Укажи реальный путь
+                    telegramMessageService.sendApkFile(chatId, apkPath);
                     break;
                 case "windows":
                     instructionText = """
