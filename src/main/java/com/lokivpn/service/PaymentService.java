@@ -4,6 +4,7 @@ import com.lokivpn.model.PaymentRecord;
 import com.lokivpn.model.User;
 import com.lokivpn.repository.PaymentRepository;
 import com.lokivpn.repository.UserRepository;
+import jakarta.transaction.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -101,6 +102,7 @@ public class PaymentService {
         }
     }
 
+    @Transactional
     public void handleSuccessfulPayment(Update update) {
         if (update.getMessage().hasSuccessfulPayment()) {
             SuccessfulPayment payment = update.getMessage().getSuccessfulPayment();
@@ -126,15 +128,19 @@ public class PaymentService {
                 logger.info("Сохраняем платёж: {}", paymentRecord);
                 paymentRepository.save(paymentRecord);
 
-                // Обновление баланса пользователя
+                // Получаем текущий баланс и прибавляем сумму платежа
                 int currentBalance = getUserBalance(userId);
-                int newBalance = currentBalance + payment.getTotalAmount() / 100; // Конвертация в рубли
-                updateUserBalance(userId, newBalance);
+                int amountToAdd = payment.getTotalAmount() / 100; // Конвертация в рубли
+
+                // Используем обновление с прибавлением баланса в SQL-запросе
+                userRepository.incrementBalance(userId, amountToAdd);
+
+                logger.info("Обновляем баланс пользователя {} с {} на {}", userId, currentBalance, currentBalance + amountToAdd);
 
                 // Записываем действие
-                userActionLogService.logAction(userId, "Пополнение", payment.getTotalAmount() / 100 + "₽");
+                userActionLogService.logAction(userId, "Пополнение", amountToAdd + "₽");
 
-                logger.info("Платёж успешно обработан, новый баланс: {}", newBalance);
+                logger.info("Платёж успешно обработан, новый баланс: {}", currentBalance + amountToAdd);
                 sendPaymentConfirmation(chatId); // Отправка сообщения о подтверждении платежа
             } catch (Exception e) {
                 logger.error("Ошибка обработки платежа: {}", e.getMessage(), e);
@@ -179,10 +185,6 @@ public class PaymentService {
         return userRepository.findById(userId)
                 .map(User::getBalance)
                 .orElse(0); // Если пользователь не найден, вернуть 0
-    }
-
-    private void updateUserBalance(Long userId, int newBalance) {
-        userRepository.updateBalanceByUserId(userId, newBalance);
     }
 
     private void sendPaymentConfirmation(String chatId) {

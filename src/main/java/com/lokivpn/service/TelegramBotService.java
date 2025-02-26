@@ -210,9 +210,6 @@ public class TelegramBotService {
                 } else if (data.startsWith("download_config_")) {
                     Long clientId = Long.parseLong(data.split("_")[2]);
                     downloadConfig(chatId, clientId);
-                } else if (data.startsWith("download_qr_")) {
-                    Long clientId = Long.parseLong(data.split("_")[2]);
-                    downloadQr(chatId, clientId);
                 } else if (data.startsWith("pay_")) {
                     int amount = Integer.parseInt(data.split("_")[1]);
                     paymentService.initiatePayment(chatId, amount);
@@ -274,8 +271,6 @@ public class TelegramBotService {
         markup.setKeyboard(List.of(List.of(confirmButton, cancelButton)));
         return markup;
     }
-
-    // Подтверждение и получение клиента
     private void confirmVpnBinding(String chatId) {
         if (chatId == null || chatId.isEmpty()) {
             throw new IllegalArgumentException("chatId не может быть null или пустым.");
@@ -288,7 +283,7 @@ public class TelegramBotService {
                 .orElseThrow(() -> new RuntimeException("Пользователь с chatId " + chatId + " не найден."));
 
         // Проверяем баланс пользователя
-        int minimumBalance = 150; // Стоимость клиента
+        int minimumBalance = 75; // Стоимость клиента
         if (user.getBalance() < minimumBalance) {
             messageSender.sendMessage(chatId,
                     String.format("❌ У вас недостаточно средств. Ваш текущий баланс: %d₽. Для подключения клиента необходимо %d₽.",
@@ -304,29 +299,23 @@ public class TelegramBotService {
         vpnClient.setAssigned(true);
         vpnClient.setUserId(chatIdLong);
 
-        // Генерируем уникальный 12-значный ключ
-        String token;
+        // Берем путь к конфигу и шифруем его
+        String encryptedToken;
         try {
-            token = generateUniqueKey(); // Теперь используем тот же метод генерации!
+            String configPath = vpnClient.getConfigFile(); // Берем путь к конфигу
+            encryptedToken = tokenService.encrypt(configPath); // Шифруем путь
+            vpnClient.setEncryptedKey(encryptedToken);
+            vpnClientRepository.save(vpnClient);
         } catch (Exception e) {
-            logger.error("Ошибка при генерации токена для клиента: {}", vpnClient.getClientName(), e);
+            logger.error("Ошибка при шифровании пути для клиента '{}': {}", vpnClient.getClientName(), e.getMessage(), e);
             messageSender.sendMessage(chatId, "❌ Ошибка при генерации токена. Свяжитесь с поддержкой.");
             return;
         }
 
-        // Сохраняем токен в базе данных
-        vpnClient.setEncryptedKey(token);
-        vpnClientRepository.save(vpnClient);
-
-        // Обновляем баланс пользователя
-        user.setBalance(user.getBalance() - minimumBalance);
-        userRepository.save(user);
-
-        // Отправляем пользователю токен
+        // Отправляем пользователю зашифрованный токен
         messageSender.sendMessage(chatId,
                 String.format("✅ Клиент '%s' успешно привязан. Найти его можете в разделе 'Мои конфиги'.", vpnClient.getClientName()));
     }
-
 
     // Отмена операции
     private void cancelVpnRequest(String chatId) {
@@ -521,7 +510,6 @@ public class TelegramBotService {
         sendMessage(chatId, "\uD83D\uDCC2 Список конфигураций:", inlineKeyboardMarkup);
     }
 
-
     public void sendClientDetails(String chatId, Long clientId) {
         Optional<VpnClient> optionalClient = vpnClientRepository.findById(clientId);
 
@@ -533,15 +521,16 @@ public class TelegramBotService {
         VpnClient client = optionalClient.get();
         String encryptedKey = client.getEncryptedKey();
 
-        // Если ключ отсутствует или пустой, генерируем новый 12-значный уникальный ключ
+        // Если ключ отсутствует или пустой, шифруем путь к конфигурации
         if (encryptedKey == null || encryptedKey.isEmpty()) {
             try {
-                encryptedKey = generateUniqueKey(); // Генерация уникального ключа
+                String configPath = client.getConfigFile(); // Берем путь из базы
+                encryptedKey = tokenService.encrypt(configPath); // Шифруем путь
                 client.setEncryptedKey(encryptedKey);
                 vpnClientRepository.save(client); // Сохраняем в базу
-                logger.info("Сгенерирован новый уникальный ключ для клиента '{}'", client.getClientName());
+                logger.info("Сгенерирован новый зашифрованный ключ для клиента '{}'", client.getClientName());
             } catch (Exception e) {
-                logger.error("Ошибка при генерации уникального ключа для клиента '{}': {}", client.getClientName(), e.getMessage(), e);
+                logger.error("Ошибка при шифровании пути для клиента '{}': {}", client.getClientName(), e.getMessage(), e);
                 sendMessage(chatId, "❌ Ошибка при генерации ключа. Свяжитесь с поддержкой.");
                 return;
             }
@@ -560,16 +549,11 @@ public class TelegramBotService {
         configButton.setText("\uD83D\uDCC4 Скачать конфиг");
         configButton.setCallbackData("download_config_" + client.getId());
 
-        InlineKeyboardButton qrButton = new InlineKeyboardButton();
-        qrButton.setText("\uD83D\uDCF1 Показать QR код");
-        qrButton.setCallbackData("download_qr_" + client.getId());
-
         InlineKeyboardButton unbindButton = new InlineKeyboardButton();
         unbindButton.setText("\uD83D\uDDD1\uFE0F Отвязать конфиг");
         unbindButton.setCallbackData("unbind_client_" + client.getId());
 
-        rows.add(List.of(configButton, qrButton));
-        rows.add(List.of(unbindButton));
+        rows.add(List.of(configButton, unbindButton));
         inlineKeyboardMarkup.setKeyboard(rows);
 
         // Отправляем сообщение
@@ -581,54 +565,6 @@ public class TelegramBotService {
 
         telegramMessageSender.sendMessage(sendMessage);
     }
-
-    private String generateUniqueKey() {
-        String key;
-        do {
-            key = generateSecureRandomKey(12); // Генерируем случайный 12-значный ключ
-        } while (vpnClientRepository.existsByEncryptedKey(key)); // Проверяем, есть ли такой ключ в БД
-
-        return key;
-    }
-
-    private String generateSecureRandomKey(int length) {
-        String upperCase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        String lowerCase = "abcdefghijklmnopqrstuvwxyz";
-        String numbers = "0123456789";
-        String specialChars = "!@#$%^&*()-_=+<>?";
-
-        String allChars = upperCase + lowerCase + numbers + specialChars;
-
-        StringBuilder key = new StringBuilder();
-        Random random = new Random();
-
-        // Гарантируем наличие хотя бы одного символа из каждой категории
-        key.append(upperCase.charAt(random.nextInt(upperCase.length())));
-        key.append(lowerCase.charAt(random.nextInt(lowerCase.length())));
-        key.append(numbers.charAt(random.nextInt(numbers.length())));
-        key.append(specialChars.charAt(random.nextInt(specialChars.length())));
-
-        // Оставшиеся символы заполняем случайными из всех доступных
-        for (int i = 4; i < length; i++) {
-            key.append(allChars.charAt(random.nextInt(allChars.length())));
-        }
-
-        // Перемешиваем символы
-        List<Character> keyChars = new ArrayList<>();
-        for (char c : key.toString().toCharArray()) {
-            keyChars.add(c);
-        }
-        Collections.shuffle(keyChars);
-
-        // Собираем строку обратно
-        StringBuilder shuffledKey = new StringBuilder();
-        for (char c : keyChars) {
-            shuffledKey.append(c);
-        }
-
-        return shuffledKey.toString();
-    }
-
 
     private void askDeviceType(String chatId, Long clientId) {
         InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
@@ -816,23 +752,6 @@ public class TelegramBotService {
         try {
             File configFile = messageSender.getConfigFile(client);
             messageSender.sendFile(chatId, configFile.getAbsolutePath(), "\uD83D\uDD12 Ваш конфиг");
-        } catch (RuntimeException e) {
-            messageSender.sendMessage(chatId, "❕Ошибка: " + e.getMessage());
-        }
-    }
-
-    public void downloadQr(String chatId, Long clientId) {
-        Optional<VpnClient> optionalClient = vpnClientRepository.findById(clientId);
-
-        if (optionalClient.isEmpty()) {
-            messageSender.sendMessage(chatId, "❕Клиент не найден.");
-            return;
-        }
-
-        VpnClient client = optionalClient.get();
-        try {
-            File qrCodeFile = messageSender.getQrCodeFile(client);
-            messageSender.sendFile(chatId, qrCodeFile.getAbsolutePath(), "\uD83D\uDDBC\uFE0F Ваш QR-код");
         } catch (RuntimeException e) {
             messageSender.sendMessage(chatId, "❕Ошибка: " + e.getMessage());
         }

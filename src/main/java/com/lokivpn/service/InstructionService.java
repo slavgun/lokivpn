@@ -42,13 +42,18 @@ public class InstructionService {
             windowsButton.setText("💻 Windows");
             windowsButton.setCallbackData("instruction_windows");
 
+            InlineKeyboardButton androidTvButton = new InlineKeyboardButton();
+            windowsButton.setText("📺 Android TV");
+            windowsButton.setCallbackData("instruction_android_tv");
+
             // Создаем разметку кнопок
             InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
             List<InlineKeyboardButton> row1 = Collections.singletonList(iosButton);
             List<InlineKeyboardButton> row2 = Collections.singletonList(androidButton);
             List<InlineKeyboardButton> row3 = Collections.singletonList(windowsButton);
+            List<InlineKeyboardButton> row4 = Collections.singletonList(androidTvButton);
 
-            markup.setKeyboard(Arrays.asList(row1, row2, row3));
+            markup.setKeyboard(Arrays.asList(row1, row2, row3, row4));
 
             message.setReplyMarkup(markup);
 
@@ -77,6 +82,8 @@ public class InstructionService {
                             - "Создать из файла или архива".
                             - Найдите и нажмите на скачанный конфиг.
                             4️⃣ Нажмите "<b>Включить</b>" и наслаждайтесь подключением!
+                            
+                            Инструкция с картинками - <a href="https://telegra.ph/LOKI-VPN-dlya-ios-podklyuchenie-02-26">Посмотреть🔍</a>
                             """;
                     break;
                 case "android":
@@ -92,6 +99,8 @@ public class InstructionService {
                             - "Import from file or archive".
                             - Найдите и нажмите на скачанный конфиг.
                             4️⃣ Нажмите "<b>Включить</b>" и наслаждайтесь подключением!
+                            
+                            Инструкция с картинками - <a href="https://telegra.ph/LOKI-VPN-dlya-android-podklyuchenie-02-26">Посмотреть🔍</a>
                             """;
                     break;
                 case "windows":
@@ -104,6 +113,8 @@ public class InstructionService {
                             - Сохраните конфиг на свое устройство.
                             3️⃣ Импортируйте конфигурацию, нажав "<b>Добавить туннель</b>" слева внизу приложения.
                             4️⃣ Нажмите на конфиг и справа в окошке "<b>Включить</b>" для подключения.
+                            
+                            Инструкция с картинками - <a href="https://telegra.ph/LOKI-VPN-dlya-Windows-podklyuchenie-02-26">Посмотреть🔍</a>
                             """;
                     break;
                 case "android_tv":
@@ -120,6 +131,8 @@ public class InstructionService {
                         - Выберите опцию "Import from file or archive".
                         5️⃣ Найдите файл конфигурации и импортируйте его.
                         6️⃣ Выберите созданный туннель и нажмите "<b>Включить</b>" для подключения.
+                        
+                        Инструкция с картинками - <a href="https://telegra.ph/LOKI-VPN-dlya-android-TV-podklyuchenie-02-26">Посмотреть🔍</a>
                         """;
                     break;
                 default:
